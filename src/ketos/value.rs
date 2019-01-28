@@ -1,7 +1,7 @@
 //! Represents any possible value type.
 
 use std::cmp::Ordering;
-use std::f64::{INFINITY, NEG_INFINITY, EPSILON};
+use std::f64::{EPSILON, INFINITY, NEG_INFINITY};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::mem::replace;
@@ -77,8 +77,10 @@ impl Value {
 
     /// Returns a value containing a foreign function.
     pub fn new_foreign_fn<F>(name: Name, f: F) -> Value
-            where F: AnyValue + Fn(&Context, &mut [Value]) -> Result<Value, Error> {
-        Value::new_foreign(ForeignFn{ name, f })
+    where
+        F: AnyValue + Fn(&Context, &mut [Value]) -> Result<Value, Error>,
+    {
+        Value::new_foreign(ForeignFn { name, f })
     }
 
     /// Compares two values; returns an error if the values cannot be compared.
@@ -86,8 +88,9 @@ impl Value {
         let ord = match (self, rhs) {
             (&Value::Unit, &Value::Unit) => Ordering::Equal,
             (&Value::Bool(a), &Value::Bool(b)) => a.cmp(&b),
-            (&Value::Float(a), &Value::Float(b)) =>
-                a.partial_cmp(&b).ok_or(ExecError::CompareNaN)?,
+            (&Value::Float(a), &Value::Float(b)) => {
+                a.partial_cmp(&b).ok_or(ExecError::CompareNaN)?
+            }
             (&Value::Integer(ref a), &Value::Integer(ref b)) => a.cmp(&b),
             (&Value::Ratio(ref a), &Value::Ratio(ref b)) => a.cmp(&b),
             (&Value::Name(a), &Value::Name(b)) => a.cmp(&b),
@@ -98,13 +101,12 @@ impl Value {
             (&Value::Path(ref a), &Value::Path(ref b)) => a.cmp(&b),
             (&Value::Unit, &Value::List(_)) => Ordering::Less,
             (&Value::List(_), &Value::Unit) => Ordering::Greater,
-            (&Value::List(ref a), &Value::List(ref b)) =>
-                cmp_value_slice(a, b)?,
+            (&Value::List(ref a), &Value::List(ref b)) => cmp_value_slice(a, b)?,
             (&Value::Struct(ref a), &Value::Struct(ref b)) => {
                 if a.def() == b.def() {
                     cmp_value_slice(a.fields(), b.fields())?
                 } else {
-                    return Err(ExecError::StructMismatch{
+                    return Err(ExecError::StructMismatch {
                         lhs: a.def().name(),
                         rhs: b.def().name(),
                     });
@@ -113,20 +115,16 @@ impl Value {
 
             // Coercible numeric comparisons
             (&Value::Float(a), &Value::Integer(ref b)) => {
-                coerce_compare_float(a, true,
-                    b.to_f64(), b.is_positive())?
+                coerce_compare_float(a, true, b.to_f64(), b.is_positive())?
             }
             (&Value::Float(a), &Value::Ratio(ref b)) => {
-                coerce_compare_float(a, true,
-                    b.to_f64(), b.is_positive())?
+                coerce_compare_float(a, true, b.to_f64(), b.is_positive())?
             }
             (&Value::Integer(ref a), &Value::Float(b)) => {
-                coerce_compare_float(b, false,
-                    a.to_f64(), a.is_positive())?
+                coerce_compare_float(b, false, a.to_f64(), a.is_positive())?
             }
             (&Value::Ratio(ref a), &Value::Float(b)) => {
-                coerce_compare_float(b, false,
-                    a.to_f64(), a.is_positive())?
+                coerce_compare_float(b, false, a.to_f64(), a.is_positive())?
             }
             (&Value::Integer(ref a), &Value::Ratio(ref b)) => {
                 let a = Ratio::from_integer(a.clone());
@@ -138,30 +136,38 @@ impl Value {
             }
 
             // Non-comparable types
-            (&Value::StructDef(_), &Value::StructDef(_)) =>
-                return Err(ExecError::CannotCompare("struct-def")),
-            (&Value::Function(_), &Value::Function(_)) =>
-                return Err(ExecError::CannotCompare("function")),
-            (&Value::Lambda(_), &Value::Lambda(_)) =>
-                return Err(ExecError::CannotCompare("lambda")),
-            (&Value::Quote(_, _), &Value::Quote(_, _)) =>
-                return Err(ExecError::CannotCompare("quote")),
-            (&Value::Quasiquote(_, _), &Value::Quasiquote(_, _)) =>
-                return Err(ExecError::CannotCompare("quasiquote")),
-            (&Value::Comma(_, _), &Value::Comma(_, _)) =>
-                return Err(ExecError::CannotCompare("comma")),
-            (&Value::CommaAt(_, _), &Value::CommaAt(_, _)) =>
-                return Err(ExecError::CannotCompare("comma-at")),
+            (&Value::StructDef(_), &Value::StructDef(_)) => {
+                return Err(ExecError::CannotCompare("struct-def"));
+            }
+            (&Value::Function(_), &Value::Function(_)) => {
+                return Err(ExecError::CannotCompare("function"));
+            }
+            (&Value::Lambda(_), &Value::Lambda(_)) => {
+                return Err(ExecError::CannotCompare("lambda"));
+            }
+            (&Value::Quote(_, _), &Value::Quote(_, _)) => {
+                return Err(ExecError::CannotCompare("quote"));
+            }
+            (&Value::Quasiquote(_, _), &Value::Quasiquote(_, _)) => {
+                return Err(ExecError::CannotCompare("quasiquote"));
+            }
+            (&Value::Comma(_, _), &Value::Comma(_, _)) => {
+                return Err(ExecError::CannotCompare("comma"));
+            }
+            (&Value::CommaAt(_, _), &Value::CommaAt(_, _)) => {
+                return Err(ExecError::CannotCompare("comma-at"));
+            }
 
             (&Value::Foreign(ref a), ref b) => a.compare_to_value(b)?,
-            (ref a, &Value::Foreign(ref b)) =>
-                flip_ordering(b.compare_to_value(a)?),
+            (ref a, &Value::Foreign(ref b)) => flip_ordering(b.compare_to_value(a)?),
 
             // Type mismatch
-            (a, b) => return Err(ExecError::TypeMismatch{
-                lhs: a.type_name(),
-                rhs: b.type_name(),
-            })
+            (a, b) => {
+                return Err(ExecError::TypeMismatch {
+                    lhs: a.type_name(),
+                    rhs: b.type_name(),
+                });
+            }
         };
 
         Ok(ord)
@@ -177,18 +183,10 @@ impl Value {
             (&Value::Integer(ref a), &Value::Integer(ref b)) => a == b,
             (&Value::Ratio(ref a), &Value::Ratio(ref b)) => a == b,
 
-            (&Value::Float(a), &Value::Integer(ref b)) => {
-                coerce_equal_float(a, b.to_f64())
-            }
-            (&Value::Float(a), &Value::Ratio(ref b)) => {
-                coerce_equal_float(a, b.to_f64())
-            }
-            (&Value::Integer(ref a), &Value::Float(b)) => {
-                coerce_equal_float(b, a.to_f64())
-            }
-            (&Value::Ratio(ref a), &Value::Float(b)) => {
-                coerce_equal_float(b, a.to_f64())
-            }
+            (&Value::Float(a), &Value::Integer(ref b)) => coerce_equal_float(a, b.to_f64()),
+            (&Value::Float(a), &Value::Ratio(ref b)) => coerce_equal_float(a, b.to_f64()),
+            (&Value::Integer(ref a), &Value::Float(b)) => coerce_equal_float(b, a.to_f64()),
+            (&Value::Ratio(ref a), &Value::Float(b)) => coerce_equal_float(b, a.to_f64()),
 
             (&Value::Integer(ref a), &Value::Ratio(ref b)) => a == b,
             (&Value::Ratio(ref a), &Value::Integer(ref b)) => a == b,
@@ -199,17 +197,15 @@ impl Value {
             (&Value::String(ref a), &Value::String(ref b)) => a == b,
             (&Value::Bytes(ref a), &Value::Bytes(ref b)) => a == b,
             (&Value::Path(ref a), &Value::Path(ref b)) => a == b,
-            (&Value::Quote(ref a, na), &Value::Quote(ref b, nb)) =>
-                na == nb && a.is_equal(&b)?,
+            (&Value::Quote(ref a, na), &Value::Quote(ref b, nb)) => na == nb && a.is_equal(&b)?,
             (&Value::Unit, &Value::List(_)) => false,
             (&Value::List(_), &Value::Unit) => false,
-            (&Value::List(ref a), &Value::List(ref b)) =>
-                eq_value_slice(a, b)?,
+            (&Value::List(ref a), &Value::List(ref b)) => eq_value_slice(a, b)?,
             (&Value::Struct(ref a), &Value::Struct(ref b)) => {
                 if a.def() == b.def() {
                     eq_value_slice(a.fields(), b.fields())?
                 } else {
-                    return Err(ExecError::StructMismatch{
+                    return Err(ExecError::StructMismatch {
                         lhs: a.def().name(),
                         rhs: b.def().name(),
                     });
@@ -222,10 +218,12 @@ impl Value {
             (&Value::Foreign(ref a), ref b) => a.is_equal_to_value(b)?,
             (ref a, &Value::Foreign(ref b)) => b.is_equal_to_value(a)?,
 
-            (a, b) => return Err(ExecError::TypeMismatch{
-                lhs: a.type_name(),
-                rhs: b.type_name(),
-            })
+            (a, b) => {
+                return Err(ExecError::TypeMismatch {
+                    lhs: a.type_name(),
+                    rhs: b.type_name(),
+                });
+            }
         };
 
         Ok(eq)
@@ -242,31 +240,31 @@ impl Value {
             (&Value::Float(a), &Value::Float(b)) => float_is_identical(a, b),
             (&Value::Integer(ref a), &Value::Integer(ref b)) => a == b,
             (&Value::Ratio(ref a), &Value::Ratio(ref b)) => a == b,
-            (&Value::Struct(ref a), &Value::Struct(ref b)) =>
-                a.def() == b.def() &&
-                    a.fields().iter().zip(b.fields().iter())
-                        .all(|(a, b)| a.is_identical(b)),
+            (&Value::Struct(ref a), &Value::Struct(ref b)) => {
+                a.def() == b.def()
+                    && a.fields()
+                        .iter()
+                        .zip(b.fields().iter())
+                        .all(|(a, b)| a.is_identical(b))
+            }
             (&Value::Name(a), &Value::Name(b)) => a == b,
             (&Value::Keyword(a), &Value::Keyword(b)) => a == b,
             (&Value::Char(a), &Value::Char(b)) => a == b,
             (&Value::String(ref a), &Value::String(ref b)) => a == b,
             (&Value::Bytes(ref a), &Value::Bytes(ref b)) => a == b,
             (&Value::Path(ref a), &Value::Path(ref b)) => a == b,
-            (&Value::Quasiquote(ref a, na), &Value::Quasiquote(ref b, nb)) =>
-                na == nb && a.is_identical(b),
-            (&Value::Comma(ref a, na), &Value::Comma(ref b, nb)) =>
-                na == nb && a.is_identical(b),
-            (&Value::Quote(ref a, na), &Value::Quote(ref b, nb)) =>
-                na == nb && a.is_identical(b),
-            (&Value::List(ref a), &Value::List(ref b)) =>
-                list_is_identical(a, b),
+            (&Value::Quasiquote(ref a, na), &Value::Quasiquote(ref b, nb)) => {
+                na == nb && a.is_identical(b)
+            }
+            (&Value::Comma(ref a, na), &Value::Comma(ref b, nb)) => na == nb && a.is_identical(b),
+            (&Value::Quote(ref a, na), &Value::Quote(ref b, nb)) => na == nb && a.is_identical(b),
+            (&Value::List(ref a), &Value::List(ref b)) => list_is_identical(a, b),
             (&Value::Function(ref a), &Value::Function(ref b)) => a == b,
             (&Value::Lambda(ref a), &Value::Lambda(ref b)) => a == b,
 
-            (&Value::Foreign(ref a), &Value::Foreign(ref b)) =>
-                a.is_identical_to(&**b),
+            (&Value::Foreign(ref a), &Value::Foreign(ref b)) => a.is_identical_to(&**b),
 
-            _ => false
+            _ => false,
         }
     }
 
@@ -282,8 +280,9 @@ impl Value {
     /// If `n` would overflow.
     pub fn quasiquote(self, n: u32) -> Value {
         match self {
-            Value::Quasiquote(v, i) => Value::Quasiquote(v,
-                i.checked_add(n).expect("quasiquote overflow")),
+            Value::Quasiquote(v, i) => {
+                Value::Quasiquote(v, i.checked_add(n).expect("quasiquote overflow"))
+            }
             v => Value::Quasiquote(Box::new(v), n),
         }
     }
@@ -304,15 +303,19 @@ impl Value {
             Value::String(ref s) => 1 + s.len(),
             Value::Bytes(ref s) => 1 + s.len(),
             Value::Path(ref p) => 1 + p.as_os_str().len(),
-            Value::Comma(ref v, _) |
-            Value::CommaAt(ref v, _) |
-            Value::Quasiquote(ref v, _) |
-            Value::Quote(ref v, _) => 1 + v.size(),
+            Value::Comma(ref v, _)
+            | Value::CommaAt(ref v, _)
+            | Value::Quasiquote(ref v, _)
+            | Value::Quote(ref v, _) => 1 + v.size(),
             Value::List(ref li) => 1 + li.iter().map(|v| v.size()).sum::<usize>(),
-            Value::Lambda(ref l) =>
-                1 + l.values.as_ref().map_or(0, |v| v.iter().map(|v| v.size()).sum()),
+            Value::Lambda(ref l) => {
+                1 + l
+                    .values
+                    .as_ref()
+                    .map_or(0, |v| v.iter().map(|v| v.size()).sum())
+            }
             Value::Foreign(ref v) => v.size(),
-            _ => 1
+            _ => 1,
         }
     }
 
@@ -323,8 +326,7 @@ impl Value {
     /// If `n` would overflow.
     pub fn comma(self, n: u32) -> Value {
         match self {
-            Value::Comma(v, i) => Value::Comma(v,
-                i.checked_add(n).expect("comma overflow")),
+            Value::Comma(v, i) => Value::Comma(v, i.checked_add(n).expect("comma overflow")),
             Value::CommaAt(v, i) => Value::CommaAt(v, i + n),
             v => Value::Comma(Box::new(v), n),
         }
@@ -337,9 +339,8 @@ impl Value {
     /// If `n` would overflow.
     pub fn comma_at(self, n: u32) -> Value {
         match self {
-            Value::CommaAt(v, i) => Value::CommaAt(v,
-                i.checked_add(n).expect("comma_at overflow")),
-            v => Value::CommaAt(Box::new(v), n)
+            Value::CommaAt(v, i) => Value::CommaAt(v, i.checked_add(n).expect("comma_at overflow")),
+            v => Value::CommaAt(Box::new(v), n),
         }
     }
 
@@ -350,8 +351,7 @@ impl Value {
     /// If `n` would overflow.
     pub fn quote(self, n: u32) -> Value {
         match self {
-            Value::Quote(v, i) => Value::Quote(v,
-                i.checked_add(n).expect("quote overflow")),
+            Value::Quote(v, i) => Value::Quote(v, i.checked_add(n).expect("quote overflow")),
             v => Value::Quote(Box::new(v), n),
         }
     }
@@ -372,10 +372,10 @@ impl Value {
             Value::Name(_) => "name",
             Value::Keyword(_) => "keyword",
             // XXX: Does this make sense?
-            Value::Quasiquote(_, _) |
-            Value::Comma(_, _) |
-            Value::CommaAt(_, _) |
-            Value::Quote(_, _) => "object",
+            Value::Quasiquote(_, _)
+            | Value::Comma(_, _)
+            | Value::CommaAt(_, _)
+            | Value::Quote(_, _) => "object",
             Value::List(_) => "list",
             Value::Struct(_) => "struct",
             Value::StructDef(_) => "struct-def",
@@ -406,7 +406,7 @@ pub trait ForeignValue: AnyValue + fmt::Debug {
     fn compare_to_value(&self, rhs: &Value) -> Result<Ordering, ExecError> {
         match *rhs {
             Value::Foreign(ref rhs) => self.compare_to(&**rhs),
-            ref v => Err(ExecError::expected(self.type_name(), v))
+            ref v => Err(ExecError::expected(self.type_name(), v)),
         }
     }
 
@@ -425,7 +425,7 @@ pub trait ForeignValue: AnyValue + fmt::Debug {
     ///
     /// The default implementation unconditionally returns an error.
     fn is_equal_to(&self, rhs: &ForeignValue) -> Result<bool, ExecError> {
-        Err(ExecError::TypeMismatch{
+        Err(ExecError::TypeMismatch {
             lhs: self.type_name(),
             rhs: rhs.type_name(),
         })
@@ -438,7 +438,7 @@ pub trait ForeignValue: AnyValue + fmt::Debug {
     fn is_equal_to_value(&self, rhs: &Value) -> Result<bool, ExecError> {
         match *rhs {
             Value::Foreign(ref rhs) => self.is_equal_to(&**rhs),
-            ref v => Err(ExecError::expected(self.type_name(), v))
+            ref v => Err(ExecError::expected(self.type_name(), v)),
         }
     }
 
@@ -469,9 +469,8 @@ pub trait ForeignValue: AnyValue + fmt::Debug {
     /// Calls the value as a function.
     ///
     /// The default implementation unconditionally returns an error.
-    fn call_value(&self, ctx: &Context, args: &mut [Value])
-            -> Result<Value, Error> {
-        Err(From::from(ExecError::TypeError{
+    fn call_value(&self, ctx: &Context, args: &mut [Value]) -> Result<Value, Error> {
+        Err(From::from(ExecError::TypeError {
             expected: "function",
             found: self.type_name(),
             value: None,
@@ -482,10 +481,12 @@ pub trait ForeignValue: AnyValue + fmt::Debug {
     ///
     /// The result will be used in applying memory restrictions to executing code.
     /// The result **MUST NOT** change for the lifetime of the value.
-    fn size(&self) -> usize { 2 }
+    fn size(&self) -> usize {
+        2
+    }
 }
 
-impl_any_cast!{ ForeignValue }
+impl_any_cast! { ForeignValue }
 
 /// Represents a foreign value that contains a callable function or closure
 pub struct ForeignFn<F> {
@@ -500,7 +501,9 @@ impl<F> fmt::Debug for ForeignFn<F> {
 }
 
 impl<F> ForeignValue for ForeignFn<F>
-        where F: AnyValue + Fn(&Context, &mut [Value]) -> Result<Value, Error> {
+where
+    F: AnyValue + Fn(&Context, &mut [Value]) -> Result<Value, Error>,
+{
     fn compare_to(&self, _rhs: &ForeignValue) -> Result<Ordering, ExecError> {
         Err(ExecError::CannotCompare("foreign-fn"))
     }
@@ -509,7 +512,9 @@ impl<F> ForeignValue for ForeignFn<F>
         write!(f, "<foreign-fn {}>", names.get(self.name))
     }
 
-    fn type_name(&self) -> &'static str { "foreign-fn" }
+    fn type_name(&self) -> &'static str {
+        "foreign-fn"
+    }
 
     fn call_value(&self, ctx: &Context, args: &mut [Value]) -> Result<Value, Error> {
         (self.f)(ctx, args)
@@ -564,11 +569,13 @@ impl NameDebug for Value {
             Value::Bool(b) => write!(f, "{:?}", b),
             Value::Float(fl) => display_float(f, fl),
             Value::Integer(ref i) => write!(f, "{}", i),
-            Value::Ratio(ref r) => if r.is_integer() {
-                write!(f, "{}/1", r)
-            } else {
-                write!(f, "{}", r)
-            },
+            Value::Ratio(ref r) => {
+                if r.is_integer() {
+                    write!(f, "{}/1", r)
+                } else {
+                    write!(f, "{}", r)
+                }
+            }
             Value::Char(ch) => write!(f, "#{:?}", ch),
             Value::String(ref s) => write!(f, "{:?}", s),
             Value::Bytes(ref s) => {
@@ -579,7 +586,7 @@ impl NameDebug for Value {
                         b'\\' => f.write_str(r"\\")?,
                         b'"' => f.write_str("\\\"")?,
                         b if is_printable(b) => write!(f, "{}", b as char)?,
-                        b => write!(f, "\\x{:02x}", b)?
+                        b => write!(f, "\\x{:02x}", b)?,
                     }
                 }
 
@@ -589,20 +596,28 @@ impl NameDebug for Value {
             Value::Name(name) => write!(f, "{}", names.get(name)),
             Value::Keyword(name) => write!(f, ":{}", names.get(name)),
             Value::Quasiquote(ref v, depth) => {
-                for _ in 0..depth { write!(f, "`")?; }
+                for _ in 0..depth {
+                    write!(f, "`")?;
+                }
                 NameDebug::fmt(v, names, f)
             }
             Value::Comma(ref v, depth) => {
-                for _ in 0..depth { write!(f, ",")?; }
+                for _ in 0..depth {
+                    write!(f, ",")?;
+                }
                 NameDebug::fmt(v, names, f)
             }
             Value::CommaAt(ref v, depth) => {
-                for _ in 0..depth { write!(f, ",")?; }
+                for _ in 0..depth {
+                    write!(f, ",")?;
+                }
                 write!(f, "@")?;
                 NameDebug::fmt(v, names, f)
             }
             Value::Quote(ref v, depth) => {
-                for _ in 0..depth { write!(f, "'")?; }
+                for _ in 0..depth {
+                    write!(f, "'")?;
+                }
                 NameDebug::fmt(v, names, f)
             }
             Value::List(ref l) => {
@@ -631,8 +646,7 @@ impl NameDebug for Value {
 
                     write!(f, "{} {{ ", names.get(def.name()))?;
 
-                    let mut iter = def.def().field_names().into_iter()
-                        .zip(s.fields().iter());
+                    let mut iter = def.def().field_names().into_iter().zip(s.fields().iter());
 
                     if let Some((name, value)) = iter.next() {
                         write!(f, "{}: ", names.get(name))?;
@@ -666,8 +680,7 @@ impl NameDebug for Value {
                     write!(f, "<struct-def {}>", names.get(def.name()))
                 }
             }
-            Value::Function(ref fun) =>
-                write!(f, "<function {}>", names.get(fun.name)),
+            Value::Function(ref fun) => write!(f, "<function {}>", names.get(fun.name)),
             Value::Lambda(ref c) => match c.code.name {
                 Some(name) => write!(f, "<lambda {}>", names.get(name)),
                 None => write!(f, "<lambda>"),
@@ -690,10 +703,22 @@ impl NameDisplay for Value {
     }
 }
 
-fn coerce_compare_float(f: f64, is_lhs: bool, other: Option<f64>, is_pos: bool)
-        -> Result<Ordering, ExecError> {
-    let lt = if is_lhs { Ordering::Less } else { Ordering::Greater };
-    let gt = if is_lhs { Ordering::Greater } else { Ordering::Less };
+fn coerce_compare_float(
+    f: f64,
+    is_lhs: bool,
+    other: Option<f64>,
+    is_pos: bool,
+) -> Result<Ordering, ExecError> {
+    let lt = if is_lhs {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    };
+    let gt = if is_lhs {
+        Ordering::Greater
+    } else {
+        Ordering::Less
+    };
 
     let ord = match f {
         f if f == INFINITY => gt,
@@ -709,8 +734,8 @@ fn coerce_compare_float(f: f64, is_lhs: bool, other: Option<f64>, is_pos: bool)
                 }
             }
             None if is_pos => lt,
-            None => gt
-        }
+            None => gt,
+        },
     };
 
     Ok(ord)
@@ -784,8 +809,7 @@ fn float_is_identical(a: f64, b: f64) -> bool {
 }
 
 fn list_is_identical(a: &[Value], b: &[Value]) -> bool {
-    a.len() == b.len() &&
-        a.iter().zip(b.iter()).all(|(a, b)| a.is_identical(b))
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| a.is_identical(b))
 }
 
 /// Borrows a Rust value from a `Value`
@@ -800,11 +824,11 @@ macro_rules! simple_from_ref {
             fn from_value_ref(v: &'a Value) -> Result<$ty, ExecError> {
                 match *v {
                     $pat => Ok($expr),
-                    ref v => Err(ExecError::expected($ty_name, v))
+                    ref v => Err(ExecError::expected($ty_name, v)),
                 }
             }
         }
-    }
+    };
 }
 
 macro_rules! integer_from_ref {
@@ -813,35 +837,35 @@ macro_rules! integer_from_ref {
             fn from_value_ref(v: &'a Value) -> Result<$ty, ExecError> {
                 match *v {
                     Value::Integer(ref i) => i.$meth().ok_or(ExecError::Overflow),
-                    ref v => Err(ExecError::expected("integer", v))
+                    ref v => Err(ExecError::expected("integer", v)),
                 }
             }
         }
-    }
+    };
 }
 
-simple_from_ref!{ (); Value::Unit => (); "unit" }
-simple_from_ref!{ bool; Value::Bool(b) => b; "bool" }
-simple_from_ref!{ char; Value::Char(ch) => ch; "char" }
-simple_from_ref!{ f32; Value::Float(f) => f as f32; "float" }
-simple_from_ref!{ f64; Value::Float(f) => f; "float" }
+simple_from_ref! { (); Value::Unit => (); "unit" }
+simple_from_ref! { bool; Value::Bool(b) => b; "bool" }
+simple_from_ref! { char; Value::Char(ch) => ch; "char" }
+simple_from_ref! { f32; Value::Float(f) => f as f32; "float" }
+simple_from_ref! { f64; Value::Float(f) => f; "float" }
 
-integer_from_ref!{ i8 to_i8 }
-integer_from_ref!{ i16 to_i16 }
-integer_from_ref!{ i32 to_i32 }
-integer_from_ref!{ i64 to_i64 }
-integer_from_ref!{ isize to_isize }
-integer_from_ref!{ u8 to_u8 }
-integer_from_ref!{ u16 to_u16 }
-integer_from_ref!{ u32 to_u32 }
-integer_from_ref!{ u64 to_u64 }
-integer_from_ref!{ usize to_usize }
+integer_from_ref! { i8 to_i8 }
+integer_from_ref! { i16 to_i16 }
+integer_from_ref! { i32 to_i32 }
+integer_from_ref! { i64 to_i64 }
+integer_from_ref! { isize to_isize }
+integer_from_ref! { u8 to_u8 }
+integer_from_ref! { u16 to_u16 }
+integer_from_ref! { u32 to_u32 }
+integer_from_ref! { u64 to_u64 }
+integer_from_ref! { usize to_usize }
 
 impl<'a> FromValueRef<'a> for &'a str {
     fn from_value_ref(v: &'a Value) -> Result<&'a str, ExecError> {
         match *v {
             Value::String(ref s) => Ok(s),
-            ref v => Err(ExecError::expected("string", v))
+            ref v => Err(ExecError::expected("string", v)),
         }
     }
 }
@@ -851,7 +875,7 @@ impl<'a> FromValueRef<'a> for &'a Path {
         match *v {
             Value::String(ref s) => Ok(s.as_ref()),
             Value::Path(ref p) => Ok(p),
-            ref v => Err(ExecError::expected("path", v))
+            ref v => Err(ExecError::expected("path", v)),
         }
     }
 }
@@ -861,7 +885,7 @@ impl<'a> FromValueRef<'a> for &'a OsStr {
         match *v {
             Value::String(ref s) => Ok(s.as_ref()),
             Value::Path(ref p) => Ok(p.as_ref()),
-            ref v => Err(ExecError::expected("path", v))
+            ref v => Err(ExecError::expected("path", v)),
         }
     }
 }
@@ -870,7 +894,7 @@ impl<'a> FromValueRef<'a> for &'a Integer {
     fn from_value_ref(v: &'a Value) -> Result<&'a Integer, ExecError> {
         match *v {
             Value::Integer(ref i) => Ok(i),
-            ref v => Err(ExecError::expected("integer", v))
+            ref v => Err(ExecError::expected("integer", v)),
         }
     }
 }
@@ -879,7 +903,7 @@ impl<'a> FromValueRef<'a> for &'a Ratio {
     fn from_value_ref(v: &'a Value) -> Result<&'a Ratio, ExecError> {
         match *v {
             Value::Ratio(ref r) => Ok(r),
-            ref v => Err(ExecError::expected("ratio", v))
+            ref v => Err(ExecError::expected("ratio", v)),
         }
     }
 }
@@ -889,7 +913,7 @@ impl<'a> FromValueRef<'a> for &'a [Value] {
         match *v {
             Value::Unit => Ok(&[]),
             Value::List(ref li) => Ok(li),
-            ref v => Err(ExecError::expected("list", v))
+            ref v => Err(ExecError::expected("list", v)),
         }
     }
 }
@@ -898,7 +922,7 @@ impl<'a> FromValueRef<'a> for &'a Bytes {
     fn from_value_ref(v: &'a Value) -> Result<&'a Bytes, ExecError> {
         match *v {
             Value::Bytes(ref b) => Ok(b),
-            ref v => Err(ExecError::expected("bytes", v))
+            ref v => Err(ExecError::expected("bytes", v)),
         }
     }
 }
@@ -907,7 +931,7 @@ impl<'a> FromValueRef<'a> for &'a [u8] {
     fn from_value_ref(v: &'a Value) -> Result<&'a [u8], ExecError> {
         match *v {
             Value::Bytes(ref b) => Ok(b.as_ref()),
-            ref v => Err(ExecError::expected("bytes", v))
+            ref v => Err(ExecError::expected("bytes", v)),
         }
     }
 }
@@ -916,9 +940,8 @@ impl<'a, T: FromValueRef<'a>> FromValueRef<'a> for Vec<T> {
     fn from_value_ref(v: &'a Value) -> Result<Vec<T>, ExecError> {
         match *v {
             Value::Unit => Ok(Vec::new()),
-            Value::List(ref li) => li.iter()
-                .map(|v| T::from_value_ref(v)).collect(),
-            ref v => Err(ExecError::expected("list", v))
+            Value::List(ref li) => li.iter().map(|v| T::from_value_ref(v)).collect(),
+            ref v => Err(ExecError::expected("list", v)),
         }
     }
 }
@@ -927,7 +950,7 @@ impl<'a> FromValueRef<'a> for &'a Lambda {
     fn from_value_ref(v: &'a Value) -> Result<&'a Lambda, ExecError> {
         match *v {
             Value::Lambda(ref l) => Ok(l),
-            ref v => Err(ExecError::expected("lambda", v))
+            ref v => Err(ExecError::expected("lambda", v)),
         }
     }
 }
@@ -951,11 +974,11 @@ macro_rules! simple_from_value {
             fn from_value(v: Value) -> Result<$ty, ExecError> {
                 match v {
                     $pat => Ok($expr),
-                    ref v => Err(ExecError::expected($ty_name, v))
+                    ref v => Err(ExecError::expected($ty_name, v)),
                 }
             }
         }
-    }
+    };
 }
 
 macro_rules! integer_from_value {
@@ -964,40 +987,40 @@ macro_rules! integer_from_value {
             fn from_value(v: Value) -> Result<$ty, ExecError> {
                 match v {
                     Value::Integer(ref i) => i.$meth().ok_or(ExecError::Overflow),
-                    ref v => Err(ExecError::expected("integer", v))
+                    ref v => Err(ExecError::expected("integer", v)),
                 }
             }
         }
-    }
+    };
 }
 
-simple_from_value!{ (); "unit"; Value::Unit => () }
-simple_from_value!{ bool; "bool"; Value::Bool(b) => b }
-simple_from_value!{ char; "char"; Value::Char(ch) => ch }
-simple_from_value!{ f32; "float"; Value::Float(f) => f as f32 }
-simple_from_value!{ f64; "float"; Value::Float(f) => f }
-simple_from_value!{ String; "string"; Value::String(s) => s.into_string() }
-simple_from_value!{ Bytes; "bytes"; Value::Bytes(s) => s }
-simple_from_value!{ Integer; "integer"; Value::Integer(i) => i }
-simple_from_value!{ Ratio; "ratio"; Value::Ratio(r) => r }
+simple_from_value! { (); "unit"; Value::Unit => () }
+simple_from_value! { bool; "bool"; Value::Bool(b) => b }
+simple_from_value! { char; "char"; Value::Char(ch) => ch }
+simple_from_value! { f32; "float"; Value::Float(f) => f as f32 }
+simple_from_value! { f64; "float"; Value::Float(f) => f }
+simple_from_value! { String; "string"; Value::String(s) => s.into_string() }
+simple_from_value! { Bytes; "bytes"; Value::Bytes(s) => s }
+simple_from_value! { Integer; "integer"; Value::Integer(i) => i }
+simple_from_value! { Ratio; "ratio"; Value::Ratio(r) => r }
 
-integer_from_value!{ i8 to_i8 }
-integer_from_value!{ i16 to_i16 }
-integer_from_value!{ i32 to_i32 }
-integer_from_value!{ i64 to_i64 }
-integer_from_value!{ isize to_isize }
-integer_from_value!{ u8 to_u8 }
-integer_from_value!{ u16 to_u16 }
-integer_from_value!{ u32 to_u32 }
-integer_from_value!{ u64 to_u64 }
-integer_from_value!{ usize to_usize }
+integer_from_value! { i8 to_i8 }
+integer_from_value! { i16 to_i16 }
+integer_from_value! { i32 to_i32 }
+integer_from_value! { i64 to_i64 }
+integer_from_value! { isize to_isize }
+integer_from_value! { u8 to_u8 }
+integer_from_value! { u16 to_u16 }
+integer_from_value! { u32 to_u32 }
+integer_from_value! { u64 to_u64 }
+integer_from_value! { usize to_usize }
 
 impl FromValue for PathBuf {
     fn from_value(v: Value) -> Result<PathBuf, ExecError> {
         match v {
             Value::String(s) => Ok(PathBuf::from(s.into_string())),
             Value::Path(p) => Ok(p),
-            ref v => Err(ExecError::expected("path", v))
+            ref v => Err(ExecError::expected("path", v)),
         }
     }
 }
@@ -1019,7 +1042,7 @@ impl FromValue for Lambda {
     fn from_value(v: Value) -> Result<Lambda, ExecError> {
         match v {
             Value::Lambda(l) => Ok(l),
-            ref v => Err(ExecError::expected("lambda", v))
+            ref v => Err(ExecError::expected("lambda", v)),
         }
     }
 }
@@ -1028,9 +1051,8 @@ impl<T: FromValue> FromValue for Vec<T> {
     fn from_value(v: Value) -> Result<Vec<T>, ExecError> {
         match v {
             Value::Unit => Ok(Vec::new()),
-            Value::List(li) => li.into_vec().into_iter()
-                .map(T::from_value).collect(),
-            ref v => Err(ExecError::expected("list", v))
+            Value::List(li) => li.into_vec().into_iter().map(T::from_value).collect(),
+            ref v => Err(ExecError::expected("list", v)),
         }
     }
 }
@@ -1042,20 +1064,20 @@ macro_rules! value_from {
                 $expr
             }
         }
-    }
+    };
 }
 
-value_from!{ (); _ => Value::Unit }
-value_from!{ bool; b => Value::Bool(b) }
-value_from!{ char; c => Value::Char(c) }
-value_from!{ Integer; i => Value::Integer(i) }
-value_from!{ Ratio; r => Value::Ratio(r) }
-value_from!{ String; s => Value::String(RcString::new(s)) }
-value_from!{ Bytes; s => Value::Bytes(s) }
-value_from!{ PathBuf; p => Value::Path(p) }
-value_from!{ OsString; s => Value::Path(PathBuf::from(s)) }
-value_from!{ f32; f => Value::Float(f64::from(f)) }
-value_from!{ f64; f => Value::Float(f) }
+value_from! { (); _ => Value::Unit }
+value_from! { bool; b => Value::Bool(b) }
+value_from! { char; c => Value::Char(c) }
+value_from! { Integer; i => Value::Integer(i) }
+value_from! { Ratio; r => Value::Ratio(r) }
+value_from! { String; s => Value::String(RcString::new(s)) }
+value_from! { Bytes; s => Value::Bytes(s) }
+value_from! { PathBuf; p => Value::Path(p) }
+value_from! { OsString; s => Value::Path(PathBuf::from(s)) }
+value_from! { f32; f => Value::Float(f64::from(f)) }
+value_from! { f64; f => Value::Float(f) }
 
 impl<'a> From<&'a str> for Value {
     fn from(s: &str) -> Value {
@@ -1124,19 +1146,19 @@ macro_rules! from_integer {
                 Value::Integer(Integer::$meth(i))
             }
         }
-    }
+    };
 }
 
-from_integer!{ i8 from_i8 }
-from_integer!{ i16 from_i16 }
-from_integer!{ i32 from_i32 }
-from_integer!{ i64 from_i64 }
-from_integer!{ isize from_isize }
-from_integer!{ u8 from_u8 }
-from_integer!{ u16 from_u16 }
-from_integer!{ u32 from_u32 }
-from_integer!{ u64 from_u64 }
-from_integer!{ usize from_usize }
+from_integer! { i8 from_i8 }
+from_integer! { i16 from_i16 }
+from_integer! { i32 from_i32 }
+from_integer! { i64 from_i64 }
+from_integer! { isize from_isize }
+from_integer! { u8 from_u8 }
+from_integer! { u16 from_u16 }
+from_integer! { u32 from_u32 }
+from_integer! { u64 from_u64 }
+from_integer! { usize from_usize }
 
 macro_rules! conv_tuple {
     ( $n:expr => $( $name:ident )+ ) => {
@@ -1184,15 +1206,15 @@ macro_rules! conv_tuple {
     }
 }
 
-conv_tuple!{  1 => A }
-conv_tuple!{  2 => A B }
-conv_tuple!{  3 => A B C }
-conv_tuple!{  4 => A B C D }
-conv_tuple!{  5 => A B C D E }
-conv_tuple!{  6 => A B C D E F }
-conv_tuple!{  7 => A B C D E F G }
-conv_tuple!{  8 => A B C D E F G H }
-conv_tuple!{  9 => A B C D E F G H I }
-conv_tuple!{ 10 => A B C D E F G H I J }
-conv_tuple!{ 11 => A B C D E F G H I J K }
-conv_tuple!{ 12 => A B C D E F G H I J K L }
+conv_tuple! {  1 => A }
+conv_tuple! {  2 => A B }
+conv_tuple! {  3 => A B C }
+conv_tuple! {  4 => A B C D }
+conv_tuple! {  5 => A B C D E }
+conv_tuple! {  6 => A B C D E F }
+conv_tuple! {  7 => A B C D E F G }
+conv_tuple! {  8 => A B C D E F G H }
+conv_tuple! {  9 => A B C D E F G H I }
+conv_tuple! { 10 => A B C D E F G H I J }
+conv_tuple! { 11 => A B C D E F G H I J K }
+conv_tuple! { 12 => A B C D E F G H I J K L }

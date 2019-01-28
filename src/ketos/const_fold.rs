@@ -3,9 +3,8 @@
 use error::Error;
 use exec::{Context, ExecError};
 use function::{
-    add_number, div_number, floor_div_number_step,
-    floor_number, sub_number, mul_number,
-    bit_and_integer, bit_or_integer, bit_xor_integer,
+    add_number, bit_and_integer, bit_or_integer, bit_xor_integer, div_number,
+    floor_div_number_step, floor_number, mul_number, sub_number,
 };
 use value::Value;
 
@@ -20,7 +19,9 @@ pub trait FoldOp {
     }
 
     /// Returns whether a value is equal to an identity value.
-    fn is_identity(_: &Value) -> bool { false }
+    fn is_identity(_: &Value) -> bool {
+        false
+    }
 
     /// Folds the two constant values, returning the resulting value.
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error>;
@@ -32,7 +33,9 @@ pub trait FoldOp {
 
     /// Finalizes a constant value when all arguments have been constant
     /// expressions.
-    fn finish(value: Value) -> Result<Value, Error> { Ok(value) }
+    fn finish(value: Value) -> Result<Value, Error> {
+        Ok(value)
+    }
 }
 
 pub enum FoldAdd {}
@@ -45,14 +48,18 @@ pub enum FoldBitOr {}
 pub enum FoldBitXor {}
 
 impl FoldOp for FoldAdd {
-    fn is_identity(v: &Value) -> bool { is_zero(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_zero(v)
+    }
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         add_number(ctx, lhs, rhs)
     }
 }
 
 impl FoldOp for FoldSub {
-    fn is_identity(v: &Value) -> bool { is_zero(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_zero(v)
+    }
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         sub_number(ctx, lhs, rhs)
     }
@@ -62,14 +69,18 @@ impl FoldOp for FoldSub {
 }
 
 impl FoldOp for FoldMul {
-    fn is_identity(v: &Value) -> bool { is_one(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_one(v)
+    }
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         mul_number(ctx, lhs, rhs)
     }
 }
 
 impl FoldOp for FoldDiv {
-    fn is_identity(v: &Value) -> bool { is_one(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_one(v)
+    }
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         div_number(ctx, lhs, rhs)
     }
@@ -79,7 +90,9 @@ impl FoldOp for FoldDiv {
 }
 
 impl FoldOp for FoldFloorDiv {
-    fn is_identity(v: &Value) -> bool { is_one(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_one(v)
+    }
 
     fn fold(ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         floor_div_number_step(ctx, lhs, rhs)
@@ -95,21 +108,27 @@ impl FoldOp for FoldFloorDiv {
 }
 
 impl FoldOp for FoldBitAnd {
-    fn is_identity(v: &Value) -> bool { is_negative_one(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_negative_one(v)
+    }
     fn fold(_ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         bit_and_integer(lhs, rhs)
     }
 }
 
 impl FoldOp for FoldBitOr {
-    fn is_identity(v: &Value) -> bool { is_zero(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_zero(v)
+    }
     fn fold(_ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         bit_or_integer(lhs, rhs)
     }
 }
 
 impl FoldOp for FoldBitXor {
-    fn is_identity(v: &Value) -> bool { is_zero(v) }
+    fn is_identity(v: &Value) -> bool {
+        is_zero(v)
+    }
     fn fold(_ctx: &Context, lhs: Value, rhs: &Value) -> Result<Value, Error> {
         bit_xor_integer(lhs, rhs)
     }
@@ -118,7 +137,7 @@ impl FoldOp for FoldBitXor {
 fn check_number(v: &Value) -> Result<(), ExecError> {
     match *v {
         Value::Float(_) | Value::Integer(_) | Value::Ratio(_) => Ok(()),
-        ref v => Err(ExecError::expected("number", v))
+        ref v => Err(ExecError::expected("number", v)),
     }
 }
 
@@ -129,20 +148,20 @@ fn check_number(v: &Value) -> Result<(), ExecError> {
 pub fn is_zero(v: &Value) -> bool {
     match *v {
         Value::Integer(ref i) => i.is_zero(),
-        _ => false
+        _ => false,
     }
 }
 
 pub fn is_negative_one(v: &Value) -> bool {
     match *v {
         Value::Integer(ref i) => i.to_i32() == Some(-1),
-        _ => false
+        _ => false,
     }
 }
 
 pub fn is_one(v: &Value) -> bool {
     match *v {
         Value::Integer(ref i) => i.is_one(),
-        _ => false
+        _ => false,
     }
 }

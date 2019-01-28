@@ -18,7 +18,7 @@ pub fn pretty_print<W: Write>(w: &mut W, names: &NameStore, v: &Value, indent: u
 
             let sub_indent = match *first {
                 Value::Name(_) => indent + 2,
-                _ => indent + 1
+                _ => indent + 1,
             };
 
             w.write_char('(')?;
@@ -47,18 +47,17 @@ pub fn pretty_print<W: Write>(w: &mut W, names: &NameStore, v: &Value, indent: u
 
             w.write_char(')')
         }
-        _ => write!(w, "{}", debug_names(names, v))
+        _ => write!(w, "{}", debug_names(names, v)),
     }
 }
 
 fn is_short_args(args: &[Value]) -> bool {
-    args.len() <= 5 && args.iter().all(|v| {
-        match *v {
+    args.len() <= 5
+        && args.iter().all(|v| match *v {
             Value::List(_) => false,
             Value::String(ref s) if s.len() > 15 => false,
-            _ => true
-        }
-    })
+            _ => true,
+        })
 }
 
 fn write_indent<W: Write>(w: &mut W, n: u32) -> fmt::Result {

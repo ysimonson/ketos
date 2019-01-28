@@ -5,28 +5,23 @@ use std::fmt;
 use std::mem::replace;
 use std::rc::Rc;
 
-use bytecode::{
-    code_flags, Code, CodeBlock,
-    Instruction, JumpInstruction, MAX_SHORT_OPERAND,
-};
+use bytecode::{code_flags, Code, CodeBlock, Instruction, JumpInstruction, MAX_SHORT_OPERAND};
 use const_fold::{
-    is_one, is_negative_one,
-    FoldOp, FoldAdd, FoldSub, FoldDiv, FoldMul, FoldFloorDiv,
-    FoldBitAnd, FoldBitOr, FoldBitXor,
+    is_negative_one, is_one, FoldAdd, FoldBitAnd, FoldBitOr, FoldBitXor, FoldDiv, FoldFloorDiv,
+    FoldMul, FoldOp, FoldSub,
 };
 use error::Error;
-use exec::{Context, ExecError, execute_lambda};
-use function::{Arity, Lambda};
+use exec::{execute_lambda, Context, ExecError};
 use function::Arity::*;
+use function::{Arity, Lambda};
 use name::{
-    get_system_fn, is_system_operator, standard_names,
-    Name, NameDisplay, NameMap, NameSet, NameStore,
-    NUM_SYSTEM_OPERATORS, SYSTEM_OPERATORS_BEGIN,
+    get_system_fn, is_system_operator, standard_names, Name, NameDisplay, NameMap, NameSet,
+    NameStore, NUM_SYSTEM_OPERATORS, SYSTEM_OPERATORS_BEGIN,
 };
 use scope::{GlobalScope, ImportSet, MasterScope, Scope};
 use structs::{StructDef, StructValueDef};
-use trace::{Trace, TraceItem, set_traceback, take_traceback};
-use value::{Value, FromValueRef};
+use trace::{set_traceback, take_traceback, Trace, TraceItem};
+use value::{FromValueRef, Value};
 
 const MAX_MACRO_RECURSION: u32 = 100;
 
@@ -34,7 +29,7 @@ const MAX_MACRO_RECURSION: u32 = 100;
 #[derive(Debug)]
 pub enum CompileError {
     /// Error in arity for call to system function
-    ArityError{
+    ArityError {
         /// Name of function
         name: Name,
         /// Expected count or range of arguments
@@ -53,7 +48,7 @@ pub enum CompileError {
     /// Duplicate name in parameter list
     DuplicateParameter(Name),
     /// Attempt to export nonexistent name from module
-    ExportError{
+    ExportError {
         /// Module name
         module: Name,
         /// Imported name
@@ -62,7 +57,7 @@ pub enum CompileError {
     /// Recursion in module imports
     ImportCycle(Name),
     /// Attempt to import nonexistent name from module
-    ImportError{
+    ImportError {
         /// Module name
         module: Name,
         /// Imported name
@@ -87,7 +82,7 @@ pub enum CompileError {
     /// Operand value overflow
     OperandOverflow(u32),
     /// Attempt to import value that is not exported
-    PrivacyError{
+    PrivacyError {
         /// Module name
         module: Name,
         /// Imported name
@@ -104,31 +99,27 @@ impl fmt::Display for CompileError {
         use self::CompileError::*;
 
         match *self {
-            ArityError{expected, found, ..} =>
-                write!(f, "expected {}; found {}", expected, found),
-            CannotDefine(_) =>
-                f.write_str("cannot define name of standard value or operator"),
-            ConstantExists(_) =>
-                f.write_str("cannot define name occupied by a constant value"),
+            ArityError {
+                expected, found, ..
+            } => write!(f, "expected {}; found {}", expected, found),
+            CannotDefine(_) => f.write_str("cannot define name of standard value or operator"),
+            ConstantExists(_) => f.write_str("cannot define name occupied by a constant value"),
             DuplicateExports => f.write_str("duplicate `export` declaration"),
             DuplicateModuleDoc => f.write_str("duplicate module doc comment"),
             DuplicateParameter(_) => f.write_str("duplicate parameter"),
-            ExportError{..} => f.write_str("export name not found in module"),
+            ExportError { .. } => f.write_str("export name not found in module"),
             ImportCycle(_) => f.write_str("import cycle detected"),
-            ImportError{..} => f.write_str("import name not found in module"),
+            ImportError { .. } => f.write_str("import name not found in module"),
             ImportShadow(_) => f.write_str("shadowing an imported name"),
-            InvalidCallExpression(ty) =>
-                write!(f, "invalid call expression of type `{}`", ty),
-            InvalidCommaAt =>
-                f.write_str("`,@expr` form is invalid outside of a list"),
+            InvalidCallExpression(ty) => write!(f, "invalid call expression of type `{}`", ty),
+            InvalidCommaAt => f.write_str("`,@expr` form is invalid outside of a list"),
             InvalidModuleName(_) => f.write_str("invalid module name"),
             MacroRecursionExceeded => f.write_str("macro recursion exceeded"),
             MissingExport => f.write_str("missing `export` declaration"),
             ModuleError(_) => f.write_str("module not found"),
             NotConstant(_) => f.write_str("value is not constant"),
-            OperandOverflow(n) =>
-                write!(f, "operand overflow: {}", n),
-            PrivacyError{..} => f.write_str("name is private"),
+            OperandOverflow(n) => write!(f, "operand overflow: {}", n),
+            PrivacyError { .. } => f.write_str("name is private"),
             SyntaxError(e) => f.write_str(e),
             UnbalancedComma => f.write_str("unbalanced ` and ,"),
         }
@@ -140,28 +131,34 @@ impl NameDisplay for CompileError {
         use self::CompileError::*;
 
         match *self {
-            ArityError{name, ..} => write!(f, "`{}` {}", names.get(name), self),
-            CannotDefine(name) |
-            ConstantExists(name) |
-            DuplicateParameter(name) |
-            InvalidModuleName(name) |
-            ModuleError(name) |
-            NotConstant(name) => write!(f, "{}: {}", self, names.get(name)),
-            ExportError{module, name} =>
-                write!(f, "cannot export name `{}`; not found in module `{}`",
-                    names.get(name), names.get(module)),
-            ImportCycle(name) =>
-                write!(f, "import cycle in loading module `{}`", names.get(name)),
-            ImportError{module, name} =>
-                write!(f, "cannot import name `{}`; not found in module `{}`",
-                    names.get(name), names.get(module)),
-            ImportShadow(name) =>
-                write!(f, "shadowing imported name: {}",
-                    names.get(name)),
-            PrivacyError{module, name} =>
-                write!(f, "name `{}` in module `{}` is private",
-                    names.get(name), names.get(module)),
-            _ => fmt::Display::fmt(self, f)
+            ArityError { name, .. } => write!(f, "`{}` {}", names.get(name), self),
+            CannotDefine(name)
+            | ConstantExists(name)
+            | DuplicateParameter(name)
+            | InvalidModuleName(name)
+            | ModuleError(name)
+            | NotConstant(name) => write!(f, "{}: {}", self, names.get(name)),
+            ExportError { module, name } => write!(
+                f,
+                "cannot export name `{}`; not found in module `{}`",
+                names.get(name),
+                names.get(module)
+            ),
+            ImportCycle(name) => write!(f, "import cycle in loading module `{}`", names.get(name)),
+            ImportError { module, name } => write!(
+                f,
+                "cannot import name `{}`; not found in module `{}`",
+                names.get(name),
+                names.get(module)
+            ),
+            ImportShadow(name) => write!(f, "shadowing imported name: {}", names.get(name)),
+            PrivacyError { module, name } => write!(
+                f,
+                "name `{}` in module `{}` is private",
+                names.get(name),
+                names.get(module)
+            ),
+            _ => fmt::Display::fmt(self, f),
         }
     }
 }
@@ -170,20 +167,28 @@ impl NameDisplay for CompileError {
 pub fn compile(ctx: &Context, value: &Value) -> Result<Code, Error> {
     let mut compiler = Compiler::new(ctx);
 
-    compiler.compile(value)
-        .map_err(|e| { set_traceback(compiler.take_trace()); e })
+    compiler.compile(value).map_err(|e| {
+        set_traceback(compiler.take_trace());
+        e
+    })
 }
 
-fn compile_lambda(compiler: &mut Compiler,
-        name: Option<Name>,
-        params: Vec<(Name, Option<Value>)>,
-        req_params: u32,
-        kw_params: Vec<(Name, Option<Value>)>,
-        rest: Option<Name>, value: &Value)
-        -> Result<(Code, Vec<Name>), Error> {
+fn compile_lambda(
+    compiler: &mut Compiler,
+    name: Option<Name>,
+    params: Vec<(Name, Option<Value>)>,
+    req_params: u32,
+    kw_params: Vec<(Name, Option<Value>)>,
+    rest: Option<Name>,
+    value: &Value,
+) -> Result<(Code, Vec<Name>), Error> {
     let r = {
-        let outer = compiler.outer.iter().cloned()
-            .chain(Some(&*compiler)).collect::<Vec<_>>();
+        let outer = compiler
+            .outer
+            .iter()
+            .cloned()
+            .chain(Some(&*compiler))
+            .collect::<Vec<_>>();
 
         let mut sub = Compiler::with_outer(&compiler.ctx, name, &outer);
 
@@ -231,9 +236,12 @@ impl<'a> Compiler<'a> {
         Compiler::with_outer(ctx, None, &[])
     }
 
-    fn with_outer(ctx: &Context, name: Option<Name>,
-            outer: &'a [&'a Compiler<'a>]) -> Compiler<'a> {
-        Compiler{
+    fn with_outer(
+        ctx: &Context,
+        name: Option<Name>,
+        outer: &'a [&'a Compiler<'a>],
+    ) -> Compiler<'a> {
+        Compiler {
             ctx: ctx.clone(),
             consts: Vec::new(),
             blocks: vec![CodeBlock::default()],
@@ -293,7 +301,7 @@ impl<'a> Compiler<'a> {
             match b.jump {
                 Some((JumpInstruction::Jump, _)) => (),
                 Some((_, n)) => must_live[n as usize] = true,
-                _ => ()
+                _ => (),
             }
 
             if block_returns(&b, &self.blocks) {
@@ -322,7 +330,7 @@ impl<'a> Compiler<'a> {
 
             match next {
                 Some(n) => i = n as usize,
-                None => break
+                None => break,
             }
         }
 
@@ -345,7 +353,7 @@ impl<'a> Compiler<'a> {
         let code = self.assemble_code()?;
         let consts = replace(&mut self.consts, Vec::new());
 
-        Ok(Code{
+        Ok(Code {
             name: None,
             code,
             consts: consts.into_boxed_slice(),
@@ -357,14 +365,16 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    fn compile_lambda(&mut self, name: Option<Name>,
-            params: Vec<(Name, Option<Value>)>,
-            req_params: u32,
-            kw_params: Vec<(Name, Option<Value>)>,
-            rest: Option<Name>, value: &Value)
-            -> Result<(Code, Vec<Name>), Error> {
-        let total_params = params.len() + kw_params.len() +
-            if rest.is_some() { 1 } else { 0 };
+    fn compile_lambda(
+        &mut self,
+        name: Option<Name>,
+        params: Vec<(Name, Option<Value>)>,
+        req_params: u32,
+        kw_params: Vec<(Name, Option<Value>)>,
+        rest: Option<Name>,
+        value: &Value,
+    ) -> Result<(Code, Vec<Name>), Error> {
+        let total_params = params.len() + kw_params.len() + if rest.is_some() { 1 } else { 0 };
 
         let n_params = params.len();
 
@@ -386,7 +396,8 @@ impl<'a> Compiler<'a> {
         // `param-` values are input parameters; `push-a` is the value of `a`
         // pushed onto the stack to be accepted by the call to `bar`.
         assert!(self.stack.is_empty());
-        self.stack.extend((0..total_params as u32).map(|n| (Name::dummy(), n)));
+        self.stack
+            .extend((0..total_params as u32).map(|n| (Name::dummy(), n)));
         self.stack_offset = total_params as u32;
 
         let mut flags = 0;
@@ -395,8 +406,10 @@ impl<'a> Compiler<'a> {
             flags |= code_flags::HAS_NAME;
         }
 
-        assert!(kw_params.is_empty() || rest.is_none(),
-            "keyword parameters and rest parameters are mutually exclusive");
+        assert!(
+            kw_params.is_empty() || rest.is_none(),
+            "keyword parameters and rest parameters are mutually exclusive"
+        );
 
         if !kw_params.is_empty() {
             flags |= code_flags::HAS_KW_PARAMS;
@@ -411,8 +424,7 @@ impl<'a> Compiler<'a> {
                 if let Some(default) = default {
                     self.branch_if_unbound(i as u32, &default)?;
                 } else {
-                    self.push_instruction(
-                        Instruction::UnboundToUnit(i as u32))?;
+                    self.push_instruction(Instruction::UnboundToUnit(i as u32))?;
                 }
             }
 
@@ -423,8 +435,7 @@ impl<'a> Compiler<'a> {
             if let Some(default) = default {
                 self.branch_if_unbound((n_params + i) as u32, &default)?;
             } else {
-                self.push_instruction(
-                    Instruction::UnboundToUnit((n_params + i) as u32))?;
+                self.push_instruction(Instruction::UnboundToUnit((n_params + i) as u32))?;
             }
 
             self.stack[n_params + i].0 = name;
@@ -442,7 +453,7 @@ impl<'a> Compiler<'a> {
         let consts = replace(&mut self.consts, Vec::new());
         let captures = replace(&mut self.captures, Vec::new());
 
-        let code = Code{
+        let code = Code {
             name,
             code,
             consts: consts.into_boxed_slice(),
@@ -460,8 +471,7 @@ impl<'a> Compiler<'a> {
         let mut value = Borrowed(value);
 
         match self.eval_constant(&value)? {
-            ConstResult::IsConstant |
-            ConstResult::IsRuntime => (),
+            ConstResult::IsConstant | ConstResult::IsRuntime => (),
             ConstResult::Partial(v) => value = Owned(v),
             ConstResult::Constant(v) => {
                 self.load_quoted_value(Owned(v))?;
@@ -489,8 +499,8 @@ impl<'a> Compiler<'a> {
                             self.push_instruction(Instruction::Push)?;
                             pushed_fn = true;
                         } else if self.is_macro(name) {
-                            self.trace.push(TraceItem::CallMacro(
-                                self.ctx.scope().name(), name));
+                            self.trace
+                                .push(TraceItem::CallMacro(self.ctx.scope().name(), name));
 
                             self.macro_recursion += 1;
                             let v = self.expand_macro(name, &li[1..], &value)?;
@@ -506,21 +516,22 @@ impl<'a> Compiler<'a> {
                             return Ok(());
                         }
 
-                        self.trace.push(TraceItem::CallCode(
-                            self.ctx.scope().name(), name));
+                        self.trace
+                            .push(TraceItem::CallCode(self.ctx.scope().name(), name));
                     }
                     Value::List(_) => {
                         self.compile_value(fn_v)?;
                         self.push_instruction(Instruction::Push)?;
                         pushed_fn = true;
 
-                        self.trace.push(
-                            TraceItem::CallExpr(self.ctx.scope().name()));
+                        self.trace
+                            .push(TraceItem::CallExpr(self.ctx.scope().name()));
                     }
                     ref v => {
                         self.set_trace_expr(&value);
-                        return Err(From::from(
-                            CompileError::InvalidCallExpression(v.type_name())));
+                        return Err(From::from(CompileError::InvalidCallExpression(
+                            v.type_name(),
+                        )));
                     }
                 }
 
@@ -535,14 +546,13 @@ impl<'a> Compiler<'a> {
                     self.push_instruction(Instruction::Call(n_args))?;
                 } else if let Value::Name(name) = *fn_v {
                     if self.self_name == Some(name) {
-                        self.push_instruction(
-                            Instruction::CallSelf(n_args))?;
+                        self.push_instruction(Instruction::CallSelf(n_args))?;
                     } else {
                         match get_system_fn(name) {
                             Some(sys_fn) => {
                                 if !sys_fn.arity.accepts(n_args) {
                                     self.set_trace_expr(&value);
-                                    return Err(From::from(CompileError::ArityError{
+                                    return Err(From::from(CompileError::ArityError {
                                         name,
                                         expected: sys_fn.arity,
                                         found: n_args,
@@ -553,8 +563,7 @@ impl<'a> Compiler<'a> {
                             }
                             None => {
                                 let c = self.add_const(Owned(Value::Name(name)));
-                                self.push_instruction(
-                                    Instruction::CallConst(c, n_args))?;
+                                self.push_instruction(Instruction::CallConst(c, n_args))?;
                             }
                         }
                     }
@@ -566,9 +575,8 @@ impl<'a> Compiler<'a> {
                 self.set_trace_expr(&value);
                 return Err(From::from(CompileError::UnbalancedComma));
             }
-            Value::Quasiquote(ref v, n) =>
-                self.compile_quasiquote(v, n)?,
-            _ => self.load_const_value(&value)?
+            Value::Quasiquote(ref v, n) => self.compile_quasiquote(v, n)?,
+            _ => self.load_const_value(&value)?,
         }
 
         Ok(())
@@ -597,18 +605,21 @@ impl<'a> Compiler<'a> {
         self.scope().contains_macro(name)
     }
 
-    fn expand_macro(&mut self, name: Name, args: &[Value], expr: &Value)
-            -> Result<Value, Error> {
+    fn expand_macro(&mut self, name: Name, args: &[Value], expr: &Value) -> Result<Value, Error> {
         if self.macro_recursion >= MAX_MACRO_RECURSION {
             self.set_trace_expr(expr);
             return Err(From::from(CompileError::MacroRecursionExceeded));
         }
 
-        let lambda = self.scope().get_macro(name)
+        let lambda = self
+            .scope()
+            .get_macro(name)
             .expect("macro not found in expand_macro");
 
-        execute_lambda(&self.ctx, lambda, args.to_vec())
-            .map_err(|e| { self.extend_global_trace(); e })
+        execute_lambda(&self.ctx, lambda, args.to_vec()).map_err(|e| {
+            self.extend_global_trace();
+            e
+        })
     }
 
     fn self_name(&self) -> Option<Name> {
@@ -625,48 +636,45 @@ impl<'a> Compiler<'a> {
 
     fn eval_constant(&mut self, value: &Value) -> Result<ConstResult, Error> {
         match *value {
-            Value::Name(name) => {
-                match self.get_constant(name) {
-                    Some(v) => Ok(ConstResult::Constant(v)),
-                    None => Ok(ConstResult::IsRuntime)
-                }
-            }
+            Value::Name(name) => match self.get_constant(name) {
+                Some(v) => Ok(ConstResult::Constant(v)),
+                None => Ok(ConstResult::IsRuntime),
+            },
             Value::List(ref li) => {
                 let name = match li[0] {
                     Value::Name(name) => name,
-                    _ => return Ok(ConstResult::IsRuntime)
+                    _ => return Ok(ConstResult::IsRuntime),
                 };
 
-                self.eval_constant_function(name, &li[1..])
-                    .map_err(|e| {
-                        self.set_trace_expr(value);
-                        e
-                    })
+                self.eval_constant_function(name, &li[1..]).map_err(|e| {
+                    self.set_trace_expr(value);
+                    e
+                })
             }
             Value::Quasiquote(ref v, n) => self.eval_constant_quasiquote(v, n),
-            Value::Comma(_, _) |
-            Value::CommaAt(_, _) => {
+            Value::Comma(_, _) | Value::CommaAt(_, _) => {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::UnbalancedComma))
             }
             Value::Quote(ref v, 1) => Ok(ConstResult::Constant((**v).clone())),
-            Value::Quote(ref v, n) =>
-                Ok(ConstResult::Constant((**v).clone().quote(n - 1))),
-            _ => Ok(ConstResult::IsConstant)
+            Value::Quote(ref v, n) => Ok(ConstResult::Constant((**v).clone().quote(n - 1))),
+            _ => Ok(ConstResult::IsConstant),
         }
     }
 
-    fn eval_constant_function(&mut self, name: Name, args: &[Value])
-            -> Result<ConstResult, Error> {
-        self.trace.push(TraceItem::CallCode(
-            self.ctx.scope().name(), name));
+    fn eval_constant_function(&mut self, name: Name, args: &[Value]) -> Result<ConstResult, Error> {
+        self.trace
+            .push(TraceItem::CallCode(self.ctx.scope().name(), name));
         let v = self.eval_constant_function_inner(name, args)?;
         self.trace.pop();
         Ok(v)
     }
 
-    fn eval_constant_function_inner(&mut self, name: Name, args: &[Value])
-            -> Result<ConstResult, Error> {
+    fn eval_constant_function_inner(
+        &mut self,
+        name: Name,
+        args: &[Value],
+    ) -> Result<ConstResult, Error> {
         let n_args = args.len();
 
         match name {
@@ -674,8 +682,9 @@ impl<'a> Compiler<'a> {
                 let mut cond = Borrowed(&args[0]);
 
                 match self.eval_constant(&cond)? {
-                    ConstResult::IsRuntime | ConstResult::Partial(_) =>
-                        return Ok(ConstResult::IsRuntime),
+                    ConstResult::IsRuntime | ConstResult::Partial(_) => {
+                        return Ok(ConstResult::IsRuntime);
+                    }
                     ConstResult::IsConstant => (),
                     ConstResult::Constant(v) => {
                         cond = Owned(v);
@@ -692,115 +701,102 @@ impl<'a> Compiler<'a> {
 
                 if cond {
                     match self.eval_constant(&args[1])? {
-                        ConstResult::IsConstant =>
-                            Ok(ConstResult::Constant(args[1].clone())),
-                        ConstResult::IsRuntime =>
-                            Ok(ConstResult::Partial(args[1].clone())),
-                        r => Ok(r)
+                        ConstResult::IsConstant => Ok(ConstResult::Constant(args[1].clone())),
+                        ConstResult::IsRuntime => Ok(ConstResult::Partial(args[1].clone())),
+                        r => Ok(r),
                     }
                 } else if n_args == 2 {
                     Ok(ConstResult::Constant(().into()))
                 } else {
                     match self.eval_constant(&args[2])? {
-                        ConstResult::IsConstant =>
-                            Ok(ConstResult::Constant(args[2].clone())),
-                        ConstResult::IsRuntime =>
-                            Ok(ConstResult::Partial(args[2].clone())),
-                        r => Ok(r)
+                        ConstResult::IsConstant => Ok(ConstResult::Constant(args[2].clone())),
+                        ConstResult::IsRuntime => Ok(ConstResult::Partial(args[2].clone())),
+                        r => Ok(r),
                     }
                 }
             }
-            standard_names::ADD if args.is_empty() =>
-                Ok(ConstResult::Constant(0.into())),
+            standard_names::ADD if args.is_empty() => Ok(ConstResult::Constant(0.into())),
             standard_names::ADD => fold_commutative::<FoldAdd>(self, name, args),
-            standard_names::SUB if args.len() >= 2 =>
-                fold_anticommutative::<FoldSub>(self, name, standard_names::ADD, args),
-            standard_names::MUL if args.is_empty() =>
-                Ok(ConstResult::Constant(1.into())),
+            standard_names::SUB if args.len() >= 2 => {
+                fold_anticommutative::<FoldSub>(self, name, standard_names::ADD, args)
+            }
+            standard_names::MUL if args.is_empty() => Ok(ConstResult::Constant(1.into())),
             standard_names::MUL => fold_commutative::<FoldMul>(self, name, args),
-            standard_names::DIV if args.len() >= 2 =>
-                fold_anticommutative::<FoldDiv>(self, name, standard_names::MUL, args),
-            standard_names::FLOOR_DIV if args.len() >= 2 =>
-                fold_anticommutative::<FoldFloorDiv>(self, name, standard_names::FLOOR, args),
-            standard_names::BIT_AND if args.is_empty() =>
-                Ok(ConstResult::Constant((-1).into())),
-            standard_names::BIT_AND =>
-                fold_commutative::<FoldBitAnd>(self, name, args),
-            standard_names::BIT_OR if args.is_empty() =>
-                Ok(ConstResult::Constant(0.into())),
-            standard_names::BIT_OR =>
-                fold_commutative::<FoldBitOr>(self, name, args),
-            standard_names::BIT_XOR if args.is_empty() =>
-                Ok(ConstResult::Constant(0.into())),
-            standard_names::BIT_XOR =>
-                fold_commutative::<FoldBitXor>(self, name, args),
-            _ if is_const_system_fn(name) =>
-                eval_system_fn(self, name, args),
-            _ => Ok(ConstResult::IsRuntime)
+            standard_names::DIV if args.len() >= 2 => {
+                fold_anticommutative::<FoldDiv>(self, name, standard_names::MUL, args)
+            }
+            standard_names::FLOOR_DIV if args.len() >= 2 => {
+                fold_anticommutative::<FoldFloorDiv>(self, name, standard_names::FLOOR, args)
+            }
+            standard_names::BIT_AND if args.is_empty() => Ok(ConstResult::Constant((-1).into())),
+            standard_names::BIT_AND => fold_commutative::<FoldBitAnd>(self, name, args),
+            standard_names::BIT_OR if args.is_empty() => Ok(ConstResult::Constant(0.into())),
+            standard_names::BIT_OR => fold_commutative::<FoldBitOr>(self, name, args),
+            standard_names::BIT_XOR if args.is_empty() => Ok(ConstResult::Constant(0.into())),
+            standard_names::BIT_XOR => fold_commutative::<FoldBitXor>(self, name, args),
+            _ if is_const_system_fn(name) => eval_system_fn(self, name, args),
+            _ => Ok(ConstResult::IsRuntime),
         }
     }
 
-    fn eval_constant_quasiquote(&mut self, value: &Value, depth: u32)
-            -> Result<ConstResult, Error> {
+    fn eval_constant_quasiquote(
+        &mut self,
+        value: &Value,
+        depth: u32,
+    ) -> Result<ConstResult, Error> {
         let v = match self.eval_constant_quasi_value(value, depth)? {
             ConstResult::IsConstant => value.clone(),
             ConstResult::Constant(v) => v,
-            res => return Ok(res)
+            res => return Ok(res),
         };
 
         match depth {
             1 => Ok(ConstResult::Constant(v)),
-            _ => Ok(ConstResult::Constant(v.quasiquote(depth - 1)))
+            _ => Ok(ConstResult::Constant(v.quasiquote(depth - 1))),
         }
     }
 
     /// Evaluates a quasiquote value into a constant expression.
-    fn eval_constant_quasi_value(&mut self, value: &Value, depth: u32)
-            -> Result<ConstResult, Error> {
+    fn eval_constant_quasi_value(
+        &mut self,
+        value: &Value,
+        depth: u32,
+    ) -> Result<ConstResult, Error> {
         match *value {
-            Value::List(ref li) =>
-                self.eval_constant_quasiquote_list(li, depth),
+            Value::List(ref li) => self.eval_constant_quasiquote_list(li, depth),
             Value::Comma(_, n) if n > depth => {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::UnbalancedComma))
             }
-            Value::Comma(ref v, n) if n == depth => {
-                match self.eval_constant(v)? {
-                    ConstResult::IsConstant => Ok(ConstResult::Constant((&**v).clone())),
-                    res => Ok(res)
-                }
-            }
-            Value::Comma(ref v, n) => {
-                match self.eval_constant_quasi_value(v, depth - n)? {
-                    ConstResult::Constant(v) =>
-                        Ok(ConstResult::Constant(v.comma(n))),
-                    res => Ok(res)
-                }
-            }
+            Value::Comma(ref v, n) if n == depth => match self.eval_constant(v)? {
+                ConstResult::IsConstant => Ok(ConstResult::Constant((&**v).clone())),
+                res => Ok(res),
+            },
+            Value::Comma(ref v, n) => match self.eval_constant_quasi_value(v, depth - n)? {
+                ConstResult::Constant(v) => Ok(ConstResult::Constant(v.comma(n))),
+                res => Ok(res),
+            },
             Value::CommaAt(_, _) => {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::InvalidCommaAt))
             }
-            Value::Quote(ref v, n) => {
-                match self.eval_constant_quasi_value(v, depth)? {
-                    ConstResult::Constant(v) =>
-                        Ok(ConstResult::Constant(v.quote(n))),
-                    res => Ok(res)
-                }
-            }
-            Value::Quasiquote(ref v, n) => {
-                match self.eval_constant_quasi_value(v, depth + n)? {
-                    ConstResult::Constant(v) =>
-                        Ok(ConstResult::Constant(v.quasiquote(n))),
-                    res => Ok(res)
-                }
-            }
-            _ => Ok(ConstResult::IsConstant)
+            Value::Quote(ref v, n) => match self.eval_constant_quasi_value(v, depth)? {
+                ConstResult::Constant(v) => Ok(ConstResult::Constant(v.quote(n))),
+                res => Ok(res),
+            },
+            Value::Quasiquote(ref v, n) => match self.eval_constant_quasi_value(v, depth + n)? {
+                ConstResult::Constant(v) => Ok(ConstResult::Constant(v.quasiquote(n))),
+                res => Ok(res),
+            },
+            _ => Ok(ConstResult::IsConstant),
         }
     }
 
-    fn eval_constant_quasiquote_list(&mut self, li: &[Value], depth: u32)
-            -> Result<ConstResult, Error> {
+    fn eval_constant_quasiquote_list(
+        &mut self,
+        li: &[Value],
+        depth: u32,
+    ) -> Result<ConstResult, Error> {
         let mut new_constant = false;
         let mut values = Vec::new();
 
@@ -814,7 +810,7 @@ impl<'a> Compiler<'a> {
                     let v = match self.eval_constant(v)? {
                         ConstResult::IsConstant => (**v).clone(),
                         ConstResult::Constant(v) => v,
-                        res => return Ok(res)
+                        res => return Ok(res),
                     };
 
                     if !new_constant {
@@ -832,40 +828,36 @@ impl<'a> Compiler<'a> {
                         }
                     }
                 }
-                Value::CommaAt(ref v, n) => {
-                    match self.eval_constant_quasi_value(v, depth - n)? {
-                        ConstResult::IsConstant => {
-                            if new_constant {
-                                values.push((**v).clone());
-                            }
+                Value::CommaAt(ref v, n) => match self.eval_constant_quasi_value(v, depth - n)? {
+                    ConstResult::IsConstant => {
+                        if new_constant {
+                            values.push((**v).clone());
                         }
-                        ConstResult::Constant(v) => {
-                            if !new_constant {
-                                values.extend(li[..i].iter().cloned());
-                            }
-                            new_constant = true;
-                            values.push(v);
-                        }
-                        res => return Ok(res)
                     }
-                }
-                _ => {
-                    match self.eval_constant_quasi_value(v, depth)? {
-                        ConstResult::IsConstant => {
-                            if new_constant {
-                                values.push(v.clone());
-                            }
+                    ConstResult::Constant(v) => {
+                        if !new_constant {
+                            values.extend(li[..i].iter().cloned());
                         }
-                        ConstResult::Constant(v) => {
-                            if !new_constant {
-                                values.extend(li[..i].iter().cloned());
-                            }
-                            new_constant = true;
-                            values.push(v);
-                        }
-                        res => return Ok(res)
+                        new_constant = true;
+                        values.push(v);
                     }
-                }
+                    res => return Ok(res),
+                },
+                _ => match self.eval_constant_quasi_value(v, depth)? {
+                    ConstResult::IsConstant => {
+                        if new_constant {
+                            values.push(v.clone());
+                        }
+                    }
+                    ConstResult::Constant(v) => {
+                        if !new_constant {
+                            values.extend(li[..i].iter().cloned());
+                        }
+                        new_constant = true;
+                        values.push(v);
+                    }
+                    res => return Ok(res),
+                },
             }
         }
 
@@ -876,17 +868,16 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_operator(&mut self, name: Name, args: &[Value], expr: &Value)
-            -> Result<(), Error> {
+    fn compile_operator(&mut self, name: Name, args: &[Value], expr: &Value) -> Result<(), Error> {
         let op = get_system_operator(name);
         let n_args = args.len() as u32;
 
-        self.trace.push(TraceItem::CallOperator(
-            self.ctx.scope().name(), name));
+        self.trace
+            .push(TraceItem::CallOperator(self.ctx.scope().name(), name));
 
         if !op.arity.accepts(n_args) {
             self.set_trace_expr(expr);
-            Err(From::from(CompileError::ArityError{
+            Err(From::from(CompileError::ArityError {
                 name,
                 expected: op.arity,
                 found: n_args,
@@ -903,8 +894,7 @@ impl<'a> Compiler<'a> {
         if self.check_quasi_const(value, depth)? {
             match depth {
                 1 => self.load_quoted_value(Borrowed(value))?,
-                _ => self.load_quoted_value(Owned(
-                    value.clone().quasiquote(depth - 1)))?
+                _ => self.load_quoted_value(Owned(value.clone().quasiquote(depth - 1)))?,
             }
         } else {
             self.compile_quasi_value(value, depth)?;
@@ -924,8 +914,7 @@ impl<'a> Compiler<'a> {
         }
 
         match *value {
-            Value::Comma(ref v, n) if n == depth =>
-                self.compile_value(v),
+            Value::Comma(ref v, n) if n == depth => self.compile_value(v),
             Value::Comma(_, n) | Value::CommaAt(_, n) if n > depth => {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::UnbalancedComma))
@@ -939,8 +928,7 @@ impl<'a> Compiler<'a> {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::InvalidCommaAt))
             }
-            Value::List(ref li) =>
-                self.compile_quasiquote_list(li, depth),
+            Value::List(ref li) => self.compile_quasiquote_list(li, depth),
             Value::Quote(ref v, n) => {
                 self.compile_quasi_value(v, depth)?;
                 self.push_instruction(Instruction::Quote(n))?;
@@ -951,8 +939,7 @@ impl<'a> Compiler<'a> {
                     match n {
                         1 => self.load_const_value(v)?,
                         _ => {
-                            let c = self.add_const(Owned(
-                                Value::Quasiquote(v.clone(), n - 1)));
+                            let c = self.add_const(Owned(Value::Quasiquote(v.clone(), n - 1)));
                             self.push_instruction(Instruction::Const(c))?;
                         }
                     }
@@ -971,7 +958,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             // Handled by `if check_quasi_const { ... }` above
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -1005,8 +992,7 @@ impl<'a> Compiler<'a> {
                 Value::CommaAt(ref v, n) => {
                     n_items += 1;
                     self.compile_quasi_value(v, depth - n)?;
-                    self.push_instruction(
-                        Instruction::CommaAt(depth - n))?;
+                    self.push_instruction(Instruction::CommaAt(depth - n))?;
                     self.push_instruction(Instruction::Push)?;
                 }
                 _ => {
@@ -1028,7 +1014,9 @@ impl<'a> Compiler<'a> {
 
         if n_lists > 1 {
             self.push_instruction(Instruction::CallSysArgs(
-                standard_names::CONCAT.get(), n_lists))?;
+                standard_names::CONCAT.get(),
+                n_lists,
+            ))?;
         }
 
         Ok(())
@@ -1049,17 +1037,15 @@ impl<'a> Compiler<'a> {
             }
             Value::Quasiquote(ref v, n) => self.check_quasi_const(v, depth + n),
             Value::Quote(ref v, _) => self.check_quasi_const(v, depth),
-            Value::Comma(_, n)
-            | Value::CommaAt(_, n) if n > depth => {
+            Value::Comma(_, n) | Value::CommaAt(_, n) if n > depth => {
                 self.set_trace_expr(value);
                 Err(From::from(CompileError::UnbalancedComma))
             }
-            Value::Comma(_, n)
-            | Value::CommaAt(_, n) if n == depth => Ok(false),
-            Value::Comma(ref v, n)
-            | Value::CommaAt(ref v, n) =>
-                self.check_quasi_const(v, depth - n),
-            _ => Ok(true)
+            Value::Comma(_, n) | Value::CommaAt(_, n) if n == depth => Ok(false),
+            Value::Comma(ref v, n) | Value::CommaAt(ref v, n) => {
+                self.check_quasi_const(v, depth - n)
+            }
+            _ => Ok(true),
         }
     }
 
@@ -1131,7 +1117,7 @@ impl<'a> Compiler<'a> {
             standard_names::ID if n_args == 1 => {
                 self.compile_value(&args[0])?;
             }
-            _ => return Ok(false)
+            _ => return Ok(false),
         }
 
         Ok(true)
@@ -1175,13 +1161,13 @@ impl<'a> Compiler<'a> {
         let lhs_const = match self.eval_constant(lhs)? {
             ConstResult::IsConstant => Some(Borrowed(lhs)),
             ConstResult::Constant(v) => Some(Owned(v)),
-            _ => None
+            _ => None,
         };
 
         let rhs_const = match self.eval_constant(rhs)? {
             ConstResult::IsConstant => Some(Borrowed(rhs)),
             ConstResult::Constant(v) => Some(Owned(v)),
-            _ => None
+            _ => None,
         };
 
         if let Some(rhs) = rhs_const {
@@ -1206,13 +1192,13 @@ impl<'a> Compiler<'a> {
         let lhs_const = match self.eval_constant(lhs)? {
             ConstResult::IsConstant => Some(Borrowed(lhs)),
             ConstResult::Constant(v) => Some(Owned(v)),
-            _ => None
+            _ => None,
         };
 
         let rhs_const = match self.eval_constant(rhs)? {
             ConstResult::IsConstant => Some(Borrowed(rhs)),
             ConstResult::Constant(v) => Some(Owned(v)),
-            _ => None
+            _ => None,
         };
 
         if let Some(rhs) = rhs_const {
@@ -1241,8 +1227,7 @@ impl<'a> Compiler<'a> {
                 self.compile_value(arg)?;
                 self.push_instruction(Instruction::Push)?;
             }
-            self.push_instruction(
-                Instruction::List(args.len() as u32))?;
+            self.push_instruction(Instruction::List(args.len() as u32))?;
         }
 
         Ok(())
@@ -1263,7 +1248,8 @@ impl<'a> Compiler<'a> {
         let bind_block = self.new_block();
         let final_block = self.new_block();
 
-        self.current_block().jump_to(JumpInstruction::JumpIfBound(pos), final_block);
+        self.current_block()
+            .jump_to(JumpInstruction::JumpIfBound(pos), final_block);
 
         self.use_next(bind_block);
         self.compile_value(value)?;
@@ -1282,8 +1268,7 @@ impl<'a> Compiler<'a> {
                 self.push_instruction(Instruction::Push)?;
             }
 
-            self.push_instruction(
-                Instruction::BuildClosure(n, captures.len() as u32))
+            self.push_instruction(Instruction::BuildClosure(n, captures.len() as u32))
         }
     }
 
@@ -1305,7 +1290,7 @@ impl<'a> Compiler<'a> {
                 self.push_instruction(Instruction::LoadC(n))?;
                 Ok(true)
             }
-            None => Ok(false)
+            None => Ok(false),
         }
     }
 
@@ -1335,9 +1320,7 @@ impl<'a> Compiler<'a> {
             Value::Unit => self.push_instruction(Instruction::Unit),
             Value::Bool(true) => self.push_instruction(Instruction::True),
             Value::Bool(false) => self.push_instruction(Instruction::False),
-            Value::Quote(ref v, 1) => {
-                self.load_quoted_value(Borrowed(v))
-            }
+            Value::Quote(ref v, 1) => self.load_quoted_value(Borrowed(v)),
             Value::Quote(ref v, n) => {
                 let v = Value::Quote(v.clone(), n - 1);
                 self.load_quoted_value(Owned(v))
@@ -1374,20 +1357,26 @@ impl<'a> Compiler<'a> {
         let _ = self.stack.drain(n..);
     }
 
-    fn write_call_sys(&mut self, name: Name, arity: Arity, n_args: u32) -> Result<(), CompileError> {
+    fn write_call_sys(
+        &mut self,
+        name: Name,
+        arity: Arity,
+        n_args: u32,
+    ) -> Result<(), CompileError> {
         match arity {
             Arity::Exact(n) => {
                 // The only stack_offset adjustment that's done manually.
                 self.stack_offset -= n;
                 self.push_instruction(Instruction::CallSys(name.get()))
             }
-            _ => self.push_instruction(
-                Instruction::CallSysArgs(name.get(), n_args))
+            _ => self.push_instruction(Instruction::CallSysArgs(name.get(), n_args)),
         }
     }
 
     fn current_block(&mut self) -> &mut CodeBlock {
-        self.blocks.get_mut(self.cur_block).expect("invalid cur_block")
+        self.blocks
+            .get_mut(self.cur_block)
+            .expect("invalid cur_block")
     }
 
     fn new_block(&mut self) -> u32 {
@@ -1414,32 +1403,28 @@ impl<'a> Compiler<'a> {
             Instruction::Push => {
                 self.stack_offset += 1;
             }
-            Instruction::BuildClosure(_, n) |
-            Instruction::List(n) |
-            Instruction::Skip(n) => {
+            Instruction::BuildClosure(_, n) | Instruction::List(n) | Instruction::Skip(n) => {
                 self.stack_offset -= n;
             }
             // CallSys is handled at the push site
             // to avoid duplicate get_system_fn call
-            Instruction::CallSysArgs(_, n) |
-            Instruction::CallSelf(n) |
-            Instruction::CallConst(_, n) |
-            Instruction::ApplyConst(_, n) |
-            Instruction::ApplySelf(n) => {
+            Instruction::CallSysArgs(_, n)
+            | Instruction::CallSelf(n)
+            | Instruction::CallConst(_, n)
+            | Instruction::ApplyConst(_, n)
+            | Instruction::ApplySelf(n) => {
                 self.stack_offset -= n;
             }
-            Instruction::Call(n) |
-            Instruction::Apply(n) => {
+            Instruction::Call(n) | Instruction::Apply(n) => {
                 self.stack_offset -= n + 1;
             }
             Instruction::Append => {
                 self.stack_offset -= 1;
             }
-            Instruction::Eq |
-            Instruction::NotEq => {
+            Instruction::Eq | Instruction::NotEq => {
                 self.stack_offset -= 1;
             }
-            _ => ()
+            _ => (),
         }
 
         self.current_block().push_instruction(instr)
@@ -1450,19 +1435,13 @@ fn is_const_system_fn(name: Name) -> bool {
     use name::standard_names::*;
 
     match name {
-        ADD | SUB | MUL | POW | DIV | FLOOR_DIV |
-        REM | SHL | SHR | BIT_AND | BIT_OR | BIT_XOR | BIT_NOT |
-        EQ | NOT_EQ | WEAK_EQ | WEAK_NE | LT | GT | LE | GE |
-        ZERO | MIN | MAX |
-        APPEND | ELT | CONCAT | JOIN | LEN | SLICE |
-        FIRST | SECOND | LAST | INIT | TAIL | LIST | REVERSE |
-        ABS | CEIL | FLOOR | ROUND | TRUNC | INT |
-        FLOAT | INF | NAN | DENOM | FRACT | NUMER | RAT | RECIP |
-        CHARS | STRING | PATH | BYTES |
-        ID | IS | IS_INSTANCE | NULL | TYPE_OF |
-        XOR | NOT
-            => true,
-        _ => false
+        ADD | SUB | MUL | POW | DIV | FLOOR_DIV | REM | SHL | SHR | BIT_AND | BIT_OR | BIT_XOR
+        | BIT_NOT | EQ | NOT_EQ | WEAK_EQ | WEAK_NE | LT | GT | LE | GE | ZERO | MIN | MAX
+        | APPEND | ELT | CONCAT | JOIN | LEN | SLICE | FIRST | SECOND | LAST | INIT | TAIL
+        | LIST | REVERSE | ABS | CEIL | FLOOR | ROUND | TRUNC | INT | FLOAT | INF | NAN | DENOM
+        | FRACT | NUMER | RAT | RECIP | CHARS | STRING | PATH | BYTES | ID | IS | IS_INSTANCE
+        | NULL | TYPE_OF | XOR | NOT => true,
+        _ => false,
     }
 }
 
@@ -1475,9 +1454,12 @@ fn is_const_system_fn(name: Name) -> bool {
 /// `(- 1 foo 2 3)` -> `(- -4 foo)`
 ///
 /// `solo_name` is used in the case of `(foo value identity)`.
-fn fold_anticommutative<F: FoldOp>(compiler: &mut Compiler,
-        name: Name, solo_name: Name, args: &[Value])
-        -> Result<ConstResult, Error> {
+fn fold_anticommutative<F: FoldOp>(
+    compiler: &mut Compiler,
+    name: Name,
+    solo_name: Name,
+    args: &[Value],
+) -> Result<ConstResult, Error> {
     let mut args = args.iter();
     let mut new_args = Vec::new();
     let mut value = None;
@@ -1534,7 +1516,7 @@ fn fold_anticommutative<F: FoldOp>(compiler: &mut Compiler,
                     Some(F::fold_inv(&compiler.ctx, lhs, &rhs)?)
                 };
             }
-            None => value = Some(rhs.into_owned())
+            None => value = Some(rhs.into_owned()),
         }
     }
 
@@ -1567,8 +1549,11 @@ fn fold_anticommutative<F: FoldOp>(compiler: &mut Compiler,
 /// Fold constants for a commutative operation.
 ///
 /// e.g. `(+ 1 foo 2 3)` -> `(+ foo 6)`
-fn fold_commutative<F: FoldOp>(compiler: &mut Compiler, name: Name, args: &[Value])
-        -> Result<ConstResult, Error> {
+fn fold_commutative<F: FoldOp>(
+    compiler: &mut Compiler,
+    name: Name,
+    args: &[Value],
+) -> Result<ConstResult, Error> {
     let mut new_args = Vec::new();
     let mut value = None;
 
@@ -1595,7 +1580,7 @@ fn fold_commutative<F: FoldOp>(compiler: &mut Compiler, name: Name, args: &[Valu
 
         match value {
             Some(lhs) => value = Some(F::fold(&compiler.ctx, lhs, &rhs)?),
-            None => value = Some(rhs.into_owned())
+            None => value = Some(rhs.into_owned()),
         }
     }
 
@@ -1617,15 +1602,17 @@ fn fold_commutative<F: FoldOp>(compiler: &mut Compiler, name: Name, args: &[Valu
 
 /// Evaluates the named system function by calling it directly,
 /// if and only if all arguments are constant values.
-fn eval_system_fn(compiler: &mut Compiler, name: Name, args: &[Value])
-        -> Result<ConstResult, Error> {
-    let sys_fn = get_system_fn(name)
-        .expect("eval_system_fn got invalid name");
+fn eval_system_fn(
+    compiler: &mut Compiler,
+    name: Name,
+    args: &[Value],
+) -> Result<ConstResult, Error> {
+    let sys_fn = get_system_fn(name).expect("eval_system_fn got invalid name");
 
     let n_args = args.len() as u32;
 
     if !sys_fn.arity.accepts(n_args) {
-        return Err(From::from(CompileError::ArityError{
+        return Err(From::from(CompileError::ArityError {
             name,
             expected: sys_fn.arity,
             found: n_args,
@@ -1636,8 +1623,7 @@ fn eval_system_fn(compiler: &mut Compiler, name: Name, args: &[Value])
 
     for v in args {
         match compiler.eval_constant(v)? {
-            ConstResult::IsRuntime |
-            ConstResult::Partial(_) => return Ok(ConstResult::IsRuntime),
+            ConstResult::IsRuntime | ConstResult::Partial(_) => return Ok(ConstResult::IsRuntime),
             ConstResult::IsConstant => {
                 values.push(v.clone());
             }
@@ -1671,17 +1657,22 @@ fn block_returns<'a>(mut b: &'a CodeBlock, blocks: &'a [CodeBlock]) -> bool {
             (_, None) => return true,
             // This assumes that jumps cannot be cyclical.
             // Currently, the compiler does not emit cyclical jumps.
-            (Some((JumpInstruction::Jump, n)), _) |
-            (_, Some(n)) if blocks[n as usize].is_mostly_empty() => {
+            (Some((JumpInstruction::Jump, n)), _) | (_, Some(n))
+                if blocks[n as usize].is_mostly_empty() =>
+            {
                 b = &blocks[n as usize];
             }
-            _ => return false
+            _ => return false,
         }
     }
 }
 
 fn estimate_size(blocks: &[CodeBlock]) -> usize {
-    blocks.iter().map(|b| b.calculate_size(false)).sum::<usize>() + 1usize // Plus one for final Return
+    blocks
+        .iter()
+        .map(|b| b.calculate_size(false))
+        .sum::<usize>()
+        + 1usize // Plus one for final Return
 }
 
 struct Operator {
@@ -1693,11 +1684,11 @@ type OperatorCallback = fn(&mut Compiler, args: &[Value]) -> Result<(), Error>;
 
 macro_rules! sys_op {
     ( $callback:ident, $arity:expr ) => {
-        Operator{
+        Operator {
             arity: $arity,
             callback: $callback,
         }
-    }
+    };
 }
 
 fn get_system_operator(name: Name) -> &'static Operator {
@@ -1810,14 +1801,15 @@ fn op_let(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
                     _ => {
                         compiler.set_trace_expr(v);
                         return Err(From::from(CompileError::SyntaxError(
-                            "expected list of 2 elements")))
+                            "expected list of 2 elements",
+                        )));
                     }
                 }
             }
         }
         ref v => {
             compiler.set_trace_expr(v);
-            return Err(From::from(CompileError::SyntaxError("expected list")))
+            return Err(From::from(CompileError::SyntaxError("expected list")));
         }
     }
 
@@ -1846,7 +1838,9 @@ fn op_define(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         Value::Name(name) => {
             // Replace operator item with more specific item
             compiler.trace.pop();
-            compiler.trace.push(TraceItem::Define(compiler.ctx.scope().name(), name));
+            compiler
+                .trace
+                .push(TraceItem::Define(compiler.ctx.scope().name(), name));
 
             let (doc, body) = extract_doc_string(args)?;
             test_define_name(compiler.scope(), name)?;
@@ -1865,15 +1859,16 @@ fn op_define(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
             // Replace operator item with more specific item
             compiler.trace.pop();
-            compiler.trace.push(TraceItem::Define(compiler.ctx.scope().name(), name));
+            compiler
+                .trace
+                .push(TraceItem::Define(compiler.ctx.scope().name(), name));
 
             test_define_name(compiler.scope(), name)?;
             let (doc, body) = extract_doc_string(args)?;
 
             let c = compiler.add_const(Owned(Value::Name(name)));
 
-            let (lambda, captures) = make_lambda(
-                compiler, Some(name), &li[1..], body, doc)?;
+            let (lambda, captures) = make_lambda(compiler, Some(name), &li[1..], body, doc)?;
 
             if compiler.is_top_level() && captures.is_empty() {
                 // Add top-level, non-capturing lambdas to global scope immediately.
@@ -1890,7 +1885,9 @@ fn op_define(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         }
         ref v => {
             compiler.set_trace_expr(v);
-            Err(From::from(CompileError::SyntaxError("expected name or list")))
+            Err(From::from(CompileError::SyntaxError(
+                "expected name or list",
+            )))
         }
     }
 }
@@ -1910,19 +1907,20 @@ fn op_macro(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     // Replace operator item with more specific item
     compiler.trace.pop();
-    compiler.trace.push(TraceItem::DefineMacro(
-        compiler.ctx.scope().name(), name));
+    compiler
+        .trace
+        .push(TraceItem::DefineMacro(compiler.ctx.scope().name(), name));
 
     let (doc, body) = extract_doc_string(args)?;
 
     test_define_name(compiler.scope(), name)?;
 
-    let (lambda, captures) = make_lambda(compiler,
-        Some(name), params, &body, doc)?;
+    let (lambda, captures) = make_lambda(compiler, Some(name), params, &body, doc)?;
 
     if !captures.is_empty() {
         return Err(From::from(CompileError::SyntaxError(
-            "macro lambda cannot enclose values")));
+            "macro lambda cannot enclose values",
+        )));
     }
 
     compiler.scope().add_macro(name, lambda);
@@ -1943,8 +1941,9 @@ fn op_struct(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     // Replace operator item with more specific item
     compiler.trace.pop();
-    compiler.trace.push(TraceItem::DefineStruct(
-        compiler.ctx.scope().name(), name));
+    compiler
+        .trace
+        .push(TraceItem::DefineStruct(compiler.ctx.scope().name(), name));
 
     let (doc, body) = extract_doc_string(args)?;
 
@@ -1965,7 +1964,8 @@ fn op_struct(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
                     _ => {
                         compiler.set_trace_expr(v);
                         return Err(From::from(CompileError::SyntaxError(
-                            "expected list of 2 elements")))
+                            "expected list of 2 elements",
+                        )));
                     }
                 }
             }
@@ -2004,16 +2004,20 @@ fn op_if(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
     let final_block = compiler.new_block();
 
     compiler.compile_value(&args[0])?;
-    compiler.current_block().jump_to(JumpInstruction::JumpIfNot, else_block);
+    compiler
+        .current_block()
+        .jump_to(JumpInstruction::JumpIfNot, else_block);
 
     compiler.use_next(then_block);
     compiler.compile_value(&args[1])?;
-    compiler.current_block().jump_to(JumpInstruction::Jump, final_block);
+    compiler
+        .current_block()
+        .jump_to(JumpInstruction::Jump, final_block);
 
     compiler.use_next(else_block);
     match args.get(2) {
         Some(value) => compiler.compile_value(value)?,
-        None => compiler.push_instruction(Instruction::Unit)?
+        None => compiler.push_instruction(Instruction::Unit)?,
     }
 
     compiler.use_next(final_block);
@@ -2035,7 +2039,9 @@ fn op_and(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         // the compiler from merging it with a previous instruction,
         // which might result in a different value, e.g. () for JumpIfNotNull.
         compiler.flush_instructions()?;
-        compiler.current_block().jump_to(JumpInstruction::JumpIfNot, last_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::JumpIfNot, last_block);
 
         let block = compiler.new_block();
         compiler.use_next(block);
@@ -2061,7 +2067,9 @@ fn op_or(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         // the compiler from merging it with a previous instruction,
         // which might result in a different value, e.g. () for JumpIfNull.
         compiler.flush_instructions()?;
-        compiler.current_block().jump_to(JumpInstruction::JumpIf, last_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::JumpIf, last_block);
 
         let block = compiler.new_block();
         compiler.use_next(block);
@@ -2106,7 +2114,8 @@ fn op_case(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
             _ => {
                 compiler.set_trace_expr(case);
                 return Err(From::from(CompileError::SyntaxError(
-                    "expected list of 2 elements")));
+                    "expected list of 2 elements",
+                )));
             }
         };
 
@@ -2119,16 +2128,20 @@ fn op_case(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
             Value::List(ref li) => {
                 for v in li {
                     match *v {
-                        Value::Unit => compiler.current_block().jump_to(
-                            JumpInstruction::JumpIfNull, code_begin),
-                        Value::Bool(true) => compiler.current_block().jump_to(
-                            JumpInstruction::JumpIf, code_begin),
-                        Value::Bool(false) => compiler.current_block().jump_to(
-                            JumpInstruction::JumpIfNot, code_begin),
+                        Value::Unit => compiler
+                            .current_block()
+                            .jump_to(JumpInstruction::JumpIfNull, code_begin),
+                        Value::Bool(true) => compiler
+                            .current_block()
+                            .jump_to(JumpInstruction::JumpIf, code_begin),
+                        Value::Bool(false) => compiler
+                            .current_block()
+                            .jump_to(JumpInstruction::JumpIfNot, code_begin),
                         ref v => {
                             let c = compiler.add_const(Borrowed(v));
-                            compiler.current_block().jump_to(
-                                JumpInstruction::JumpIfEqConst(c), code_begin);
+                            compiler
+                                .current_block()
+                                .jump_to(JumpInstruction::JumpIfEqConst(c), code_begin);
                         }
                     }
                     let b = compiler.new_block();
@@ -2137,19 +2150,24 @@ fn op_case(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
             }
             Value::Name(standard_names::ELSE) => {
                 else_case = true;
-                compiler.current_block().jump_to(JumpInstruction::Jump, code_begin);
+                compiler
+                    .current_block()
+                    .jump_to(JumpInstruction::Jump, code_begin);
             }
             ref v => {
                 compiler.set_trace_expr(v);
                 return Err(From::from(CompileError::SyntaxError(
-                    "expected list or `else`")));
+                    "expected list or `else`",
+                )));
             }
         }
 
         let prev_block = compiler.cur_block as u32;
         compiler.use_block(code_begin);
         compiler.compile_value(code)?;
-        compiler.current_block().jump_to(JumpInstruction::Jump, final_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::Jump, final_block);
         let code_end = compiler.cur_block as u32;
         code_blocks.push((code_begin, code_end));
 
@@ -2160,7 +2178,9 @@ fn op_case(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     if !else_case {
         compiler.push_instruction(Instruction::Unit)?;
-        compiler.current_block().jump_to(JumpInstruction::Jump, final_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::Jump, final_block);
     }
 
     for (begin, end) in code_blocks {
@@ -2195,7 +2215,8 @@ fn op_cond(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         if else_case {
             compiler.set_trace_expr(arg);
             return Err(From::from(CompileError::SyntaxError(
-                "unreachable condition")));
+                "unreachable condition",
+            )));
         }
 
         let case = match *arg {
@@ -2203,7 +2224,8 @@ fn op_cond(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
             _ => {
                 compiler.set_trace_expr(arg);
                 return Err(From::from(CompileError::SyntaxError(
-                    "expected list of 2 elements")));
+                    "expected list of 2 elements",
+                )));
             }
         };
 
@@ -2214,16 +2236,22 @@ fn op_cond(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
         if let Value::Name(standard_names::ELSE) = *cond {
             else_case = true;
-            compiler.current_block().jump_to(JumpInstruction::Jump, code_begin);
+            compiler
+                .current_block()
+                .jump_to(JumpInstruction::Jump, code_begin);
         } else {
             compiler.compile_value(cond)?;
-            compiler.current_block().jump_to(JumpInstruction::JumpIf, code_begin);
+            compiler
+                .current_block()
+                .jump_to(JumpInstruction::JumpIf, code_begin);
         }
 
         let prev_block = compiler.cur_block as u32;
         compiler.use_block(code_begin);
         compiler.compile_value(code)?;
-        compiler.current_block().jump_to(JumpInstruction::Jump, final_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::Jump, final_block);
         let code_end = compiler.cur_block as u32;
         code_blocks.push((code_begin, code_end));
 
@@ -2234,7 +2262,9 @@ fn op_cond(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     if !else_case {
         compiler.push_instruction(Instruction::Unit)?;
-        compiler.current_block().jump_to(JumpInstruction::Jump, final_block);
+        compiler
+            .current_block()
+            .jump_to(JumpInstruction::Jump, final_block);
     }
 
     for (begin, end) in code_blocks {
@@ -2256,7 +2286,9 @@ fn op_cond(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 fn op_lambda(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
     // Replace operator item with more specific item
     compiler.trace.pop();
-    compiler.trace.push(TraceItem::DefineLambda(compiler.ctx.scope().name()));
+    compiler
+        .trace
+        .push(TraceItem::DefineLambda(compiler.ctx.scope().name()));
 
     let (doc, body) = extract_doc_string(args)?;
 
@@ -2269,8 +2301,7 @@ fn op_lambda(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         }
     };
 
-    let (lambda, captures) = make_lambda(
-        compiler, None, li, body, doc)?;
+    let (lambda, captures) = make_lambda(compiler, None, li, body, doc)?;
 
     let c = compiler.add_const(Owned(Value::Lambda(lambda)));
     compiler.load_lambda(c, &captures)?;
@@ -2293,7 +2324,8 @@ fn op_export(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         ref v => {
             compiler.set_trace_expr(v);
             return Err(From::from(CompileError::SyntaxError(
-                "expected list of names in `export`")));
+                "expected list of names in `export`",
+            )));
         }
     };
 
@@ -2319,12 +2351,16 @@ fn op_use(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     // Replace operator item with more specific item
     compiler.trace.pop();
-    compiler.trace.push(TraceItem::UseModule(compiler.ctx.scope().name(), mod_name));
+    compiler
+        .trace
+        .push(TraceItem::UseModule(compiler.ctx.scope().name(), mod_name));
 
     let ctx = compiler.ctx.clone();
     let mods = ctx.scope().modules();
-    let m = mods.load_module(mod_name, &ctx)
-        .map_err(|e| { compiler.extend_global_trace(); e })?;
+    let m = mods.load_module(mod_name, &ctx).map_err(|e| {
+        compiler.extend_global_trace();
+        e
+    })?;
 
     let mut imp_set = ImportSet::new(mod_name);
 
@@ -2335,13 +2371,13 @@ fn op_use(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
         }
         Value::Unit => (),
         Value::List(ref li) => {
-            import_names(mod_name, &mut imp_set,
-                compiler.scope(), &m.scope, li)?;
+            import_names(mod_name, &mut imp_set, compiler.scope(), &m.scope, li)?;
         }
         ref v => {
             compiler.set_trace_expr(v);
             return Err(From::from(CompileError::SyntaxError(
-                "expected list of names or `:all`")));
+                "expected list of names or `:all`",
+            )));
         }
     }
 
@@ -2374,8 +2410,9 @@ fn op_const(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     // Replace operator item with more specific item
     compiler.trace.pop();
-    compiler.trace.push(TraceItem::DefineConst(
-        compiler.ctx.scope().name(), name));
+    compiler
+        .trace
+        .push(TraceItem::DefineConst(compiler.ctx.scope().name(), name));
 
     let (doc, body) = extract_doc_string(args)?;
 
@@ -2389,12 +2426,11 @@ fn op_const(compiler: &mut Compiler, args: &[Value]) -> Result<(), Error> {
 
     match compiler.eval_constant(&value)? {
         ConstResult::IsConstant => (),
-        ConstResult::IsRuntime |
-        ConstResult::Partial(_) => {
+        ConstResult::IsRuntime | ConstResult::Partial(_) => {
             compiler.set_trace_expr(&value);
             return Err(From::from(CompileError::NotConstant(name)));
         }
-        ConstResult::Constant(v) => value = Owned(v)
+        ConstResult::Constant(v) => value = Owned(v),
     }
 
     compiler.add_constant(name, value.into_owned());
@@ -2428,16 +2464,21 @@ fn op_set_module_doc(compiler: &mut Compiler, args: &[Value]) -> Result<(), Erro
     })
 }
 
-fn import_names(mod_name: Name, imps: &mut ImportSet,
-        a: &GlobalScope, b: &GlobalScope, names: &[Value]) -> Result<(), CompileError> {
+fn import_names(
+    mod_name: Name,
+    imps: &mut ImportSet,
+    a: &GlobalScope,
+    b: &GlobalScope,
+    names: &[Value],
+) -> Result<(), CompileError> {
     each_import(names, |src, dest| {
         if !b.contains_name(src) {
-            return Err(CompileError::ImportError{
+            return Err(CompileError::ImportError {
                 module: mod_name,
                 name: src,
             });
         } else if !b.is_exported(src) {
-            return Err(CompileError::PrivacyError{
+            return Err(CompileError::PrivacyError {
                 module: mod_name,
                 name: src,
             });
@@ -2465,18 +2506,19 @@ fn import_names(mod_name: Name, imps: &mut ImportSet,
 }
 
 fn each_import<F>(items: &[Value], mut f: F) -> Result<(), CompileError>
-        where F: FnMut(Name, Name) -> Result<(), CompileError> {
+where
+    F: FnMut(Name, Name) -> Result<(), CompileError>,
+{
     let mut iter = items.iter();
 
     while let Some(item) = iter.next() {
         let (src, dest) = match *item {
             Value::Keyword(dest) => match iter.next() {
                 Some(&Value::Name(src)) => (src, dest),
-                _ => return Err(CompileError::SyntaxError(
-                    "expected name following keyword"))
+                _ => return Err(CompileError::SyntaxError("expected name following keyword")),
             },
             Value::Name(name) => (name, name),
-            _ => return Err(CompileError::SyntaxError("expected name or keyword"))
+            _ => return Err(CompileError::SyntaxError("expected name or keyword")),
         };
 
         f(src, dest)?;
@@ -2509,9 +2551,13 @@ fn test_define_name(scope: &GlobalScope, name: Name) -> Result<(), CompileError>
 
 /// Creates a `Lambda` object using scope and local values from the given compiler.
 /// Returns the `Lambda` object and the set of names captured by the lambda.
-fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
-        args: &[Value], body: &Value, doc: Option<&str>)
-        -> Result<(Lambda, Vec<Name>), Error> {
+fn make_lambda(
+    compiler: &mut Compiler,
+    name: Option<Name>,
+    args: &[Value],
+    body: &Value,
+    doc: Option<&str>,
+) -> Result<(Lambda, Vec<Name>), Error> {
     let mut params = Vec::new();
     let mut req_params = 0;
     let mut kw_params = Vec::new();
@@ -2531,11 +2577,11 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
                 match kw {
                     standard_names::KEY => {
                         if key {
-                            return Err(From::from(CompileError::SyntaxError(
-                                "duplicate `:key`")));
+                            return Err(From::from(CompileError::SyntaxError("duplicate `:key`")));
                         } else if optional {
                             return Err(From::from(CompileError::SyntaxError(
-                                "`:key` and `:optional` are mutually exclusive")));
+                                "`:key` and `:optional` are mutually exclusive",
+                            )));
                         }
                         key = true;
                         req_params = params.len() as u32;
@@ -2543,10 +2589,12 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
                     standard_names::OPTIONAL => {
                         if optional {
                             return Err(From::from(CompileError::SyntaxError(
-                                "duplicate `:optional`")));
+                                "duplicate `:optional`",
+                            )));
                         } else if key {
                             return Err(From::from(CompileError::SyntaxError(
-                                "`:key` and `:optional` are mutually exclusive")));
+                                "`:key` and `:optional` are mutually exclusive",
+                            )));
                         }
                         optional = true;
                         req_params = params.len() as u32;
@@ -2554,25 +2602,35 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
                     standard_names::REST => {
                         if key {
                             return Err(From::from(CompileError::SyntaxError(
-                                "`:key` and `:rest` are mutually exclusive")));
+                                "`:key` and `:rest` are mutually exclusive",
+                            )));
                         }
 
                         let arg = match iter.next() {
                             Some(arg) => arg,
-                            None => return Err(From::from(CompileError::SyntaxError(
-                                "expected name after `:rest`")))
+                            None => {
+                                return Err(From::from(CompileError::SyntaxError(
+                                    "expected name after `:rest`",
+                                )));
+                            }
                         };
 
                         rest = Some(get_name(compiler, arg)?);
 
                         match iter.next() {
-                            Some(_) => return Err(From::from(CompileError::SyntaxError(
-                                "extraneous token after `:rest` argument"))),
-                            None => break
+                            Some(_) => {
+                                return Err(From::from(CompileError::SyntaxError(
+                                    "extraneous token after `:rest` argument",
+                                )));
+                            }
+                            None => break,
                         }
                     }
-                    _ => return Err(From::from(CompileError::SyntaxError(
-                        "expected :key, :optional, or :rest")))
+                    _ => {
+                        return Err(From::from(CompileError::SyntaxError(
+                            "expected :key, :optional, or :rest",
+                        )));
+                    }
                 }
                 continue;
             }
@@ -2583,12 +2641,13 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
             ref v => {
                 compiler.set_trace_expr(v);
                 return Err(From::from(CompileError::SyntaxError(
-                    "expected name, keyword, or list of 2 elements")));
+                    "expected name, keyword, or list of 2 elements",
+                )));
             }
         };
 
-        let exists = params.iter().any(|&(n, _)| n == name) ||
-            kw_params.iter().any(|&(n, _)| n == name);
+        let exists =
+            params.iter().any(|&(n, _)| n == name) || kw_params.iter().any(|&(n, _)| n == name);
 
         if exists {
             compiler.set_trace_expr(v);
@@ -2598,7 +2657,8 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
         if default.is_some() && !(key || optional) {
             compiler.set_trace_expr(v);
             return Err(From::from(CompileError::SyntaxError(
-                "default value before `:optional` or `:key`")));
+                "default value before `:optional` or `:key`",
+            )));
         }
 
         if key {
@@ -2614,16 +2674,18 @@ fn make_lambda(compiler: &mut Compiler, name: Option<Name>,
 
     if key && kw_params.is_empty() {
         return Err(From::from(CompileError::SyntaxError(
-            "expected arguments after `:key`")));
+            "expected arguments after `:key`",
+        )));
     }
 
     if optional && req_params == params.len() as u32 {
         return Err(From::from(CompileError::SyntaxError(
-            "expected arguments after `:optional`")));
+            "expected arguments after `:optional`",
+        )));
     }
 
-    let (mut code, captures) = compile_lambda(compiler,
-        name, params, req_params, kw_params, rest, body)?;
+    let (mut code, captures) =
+        compile_lambda(compiler, name, params, req_params, kw_params, rest, body)?;
 
     if let Some(doc) = doc {
         code.flags |= code_flags::HAS_DOC_STRING;

@@ -7,7 +7,7 @@ use std::str::FromStr;
 pub use num::bigint::Sign;
 
 use num::{self, BigInt, BigRational};
-use num::{FromPrimitive, ToPrimitive, Integer as NumInteger, Signed, Num, Zero, One};
+use num::{FromPrimitive, Integer as NumInteger, Num, One, Signed, ToPrimitive, Zero};
 
 /// Arbitrary precision signed integer
 #[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
@@ -141,7 +141,8 @@ impl Integer {
     #[inline]
     pub fn from_str_radix(s: &str, radix: u32) -> Result<Integer, FromStrRadixError> {
         BigInt::from_str_radix(s, radix)
-            .map(Integer).map_err(FromStrRadixError)
+            .map(Integer)
+            .map_err(FromStrRadixError)
     }
 
     /// Returns integer sign and a series of big-endian bytes.
@@ -327,15 +328,17 @@ impl Ratio {
     /// Returns the `Ratio` as an `f32` value.
     #[inline]
     pub fn to_f32(&self) -> Option<f32> {
-        self.numer().to_f32().and_then(
-            |n| self.denom().to_f32().map(|d| n / d))
+        self.numer()
+            .to_f32()
+            .and_then(|n| self.denom().to_f32().map(|d| n / d))
     }
 
     /// Returns the `Ratio` as an `f64` value.
     #[inline]
     pub fn to_f64(&self) -> Option<f64> {
-        self.numer().to_f64().and_then(
-            |n| self.denom().to_f64().map(|d| n / d))
+        self.numer()
+            .to_f64()
+            .and_then(|n| self.denom().to_f64().map(|d| n / d))
     }
 
     /// Truncates a `Ratio` and returns the whole portion as an `Integer`.
@@ -442,7 +445,9 @@ impl PartialEq<Integer> for Ratio {
 }
 
 impl PartialEq<Ratio> for Integer {
-    fn eq(&self, rhs: &Ratio) -> bool { rhs == self }
+    fn eq(&self, rhs: &Ratio) -> bool {
+        rhs == self
+    }
 }
 
 impl fmt::Display for Integer {
@@ -515,7 +520,7 @@ macro_rules! impl_un_op {
                 $ty((&self.0).$meth())
             }
         }
-    }
+    };
 }
 
 macro_rules! impl_bin_op {
@@ -555,7 +560,7 @@ macro_rules! impl_bin_op {
                 $ty((&self.0).$meth(&rhs.0))
             }
         }
-    }
+    };
 }
 
 macro_rules! impl_assign_op {
@@ -573,52 +578,56 @@ macro_rules! impl_assign_op {
                 (self.0).$meth(&rhs.0);
             }
         }
-    }
+    };
 }
 
 macro_rules! impl_ops {
     ( $ty:ident ) => {
-        impl_bin_op!{ $ty, Add, add }
-        impl_bin_op!{ $ty, Sub, sub }
-        impl_bin_op!{ $ty, Mul, mul }
-        impl_bin_op!{ $ty, Div, div }
-        impl_bin_op!{ $ty, Rem, rem }
+        impl_bin_op! { $ty, Add, add }
+        impl_bin_op! { $ty, Sub, sub }
+        impl_bin_op! { $ty, Mul, mul }
+        impl_bin_op! { $ty, Div, div }
+        impl_bin_op! { $ty, Rem, rem }
 
-        impl_assign_op!{ $ty, AddAssign, add_assign }
-        impl_assign_op!{ $ty, SubAssign, sub_assign }
-        impl_assign_op!{ $ty, MulAssign, mul_assign }
-        impl_assign_op!{ $ty, DivAssign, div_assign }
-        impl_assign_op!{ $ty, RemAssign, rem_assign }
+        impl_assign_op! { $ty, AddAssign, add_assign }
+        impl_assign_op! { $ty, SubAssign, sub_assign }
+        impl_assign_op! { $ty, MulAssign, mul_assign }
+        impl_assign_op! { $ty, DivAssign, div_assign }
+        impl_assign_op! { $ty, RemAssign, rem_assign }
 
-        impl_un_op!{ $ty, Neg, neg }
+        impl_un_op! { $ty, Neg, neg }
 
         impl ::num::Zero for $ty {
             #[inline]
-            fn is_zero(&self) -> bool { self.0.is_zero() }
+            fn is_zero(&self) -> bool {
+                self.0.is_zero()
+            }
             #[inline]
-            fn zero() -> $ty { $ty(Zero::zero()) }
+            fn zero() -> $ty {
+                $ty(Zero::zero())
+            }
         }
-    }
+    };
 }
 
 macro_rules! impl_integer_ops {
     ( $ty:ident ) => {
-        impl_ops!{ $ty }
+        impl_ops! { $ty }
 
-        impl_bin_op!{ $ty, BitAnd, bitand }
-        impl_bin_op!{ $ty, BitOr,  bitor }
-        impl_bin_op!{ $ty, BitXor, bitxor }
+        impl_bin_op! { $ty, BitAnd, bitand }
+        impl_bin_op! { $ty, BitOr,  bitor }
+        impl_bin_op! { $ty, BitXor, bitxor }
 
-        impl_assign_op!{ $ty, BitAndAssign, bitand_assign }
-        impl_assign_op!{ $ty, BitOrAssign,  bitor_assign }
-        impl_assign_op!{ $ty, BitXorAssign, bitxor_assign }
+        impl_assign_op! { $ty, BitAndAssign, bitand_assign }
+        impl_assign_op! { $ty, BitOrAssign,  bitor_assign }
+        impl_assign_op! { $ty, BitXorAssign, bitxor_assign }
 
-        impl_un_op!{ $ty, Not, not }
-    }
+        impl_un_op! { $ty, Not, not }
+    };
 }
 
-impl_integer_ops!{Integer}
-impl_ops!{Ratio}
+impl_integer_ops! {Integer}
+impl_ops! {Ratio}
 
 impl fmt::Display for Ratio {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

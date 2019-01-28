@@ -45,7 +45,7 @@ macro_rules! error_type {
     }
 }
 
-error_type!{
+error_type! {
     /// Consolidated error type; contains one of a category of errors.
     #[derive(Debug)]
     pub enum Error {
@@ -112,7 +112,9 @@ mod test {
     }
 
     impl StdError for E {
-        fn description(&self) -> &str { "error" }
+        fn description(&self) -> &str {
+            "error"
+        }
     }
 
     #[test]
